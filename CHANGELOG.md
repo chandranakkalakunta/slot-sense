@@ -6,6 +6,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### fix(tooling)+fix(tf): drill-bootstrap.sh live-drill hardening (PR-J)
+
+The dev-03 (2026-07-25) first live drill surfaced four gaps invisible
+to dry-run. Root cause common thread: subshells and external commands
+that don't cooperate with `set -euo pipefail` (silent Phase 8 exit;
+brittle stdout pattern match on external CLI output; Firebase token
+expiry mid-run that no preflight caught). Plus one non-drill config gap
+that would have bitten prod (budget hardcoded to dev-scale).
+
+- **Phase 8 must always write the Phase 9 manifest.** Verify failures
+  record into the manifest and stop the script's overall exit code, but
+  do not skip the manifest write. `gcloud logging read` and
+  `terraform plan -detailed-exitcode` now capture their exit status
+  separately from the pipeline/command result and treat a transient
+  failure (auth expiry, logging API not yet queryable, network hiccup)
+  as WARN-and-continue rather than fatal; the phase8 fail decision
+  moved to `main()`, running strictly after `phase9`. Fixes the silent
+  exit that left dev-03 without a `bootstrap-output-*.md` file.
+- **Phase 0 Firebase preflight.** `firebase projects:list` at preflight
+  time, alongside the existing ADC check; hard-fails with a
+  `firebase login --reauth` instruction if not valid. Firebase CLI
+  tokens expire faster (~1h idle) than gcloud ADC and were not
+  previously checked — this killed Phase 7's `firebase deploy`
+  mid-run on dev-03.
+- **Phase 2 addfirebase verified via projects:list.** Replaced the
+  brittle stdout pattern match (`already|success|Firebase resources`)
+  — unstable across firebase-tools versions, and observed to
+  false-warn on dev-03 despite success — with a stable, API-shaped
+  ground-truth check.
+- **`terraform/cost.tf` budget parameterized by `var.environment`.**
+  New `local.budget_amounts_inr` / `local.budget_display_names` maps;
+  dev/test at ₹5,000, prod placeholders (also ₹5,000) with a
+  `TODO(prod)` comment for the Coordinator to set real prod ceilings
+  before first prod apply. Resource address unchanged (no
+  destroy/recreate).
+- **`docs/runbooks/provision-environment.md`**: new "Authentication
+  Error / Your credentials are no longer valid" (Firebase CLI)
+  subsection under Known failures.
+- **`docs/backlog.md`**: `PHASE-8-SILENT-EXIT`,
+  `PHASE-0-FIREBASE-PREFLIGHT`, `PHASE-2-STDOUT-MATCH-BRITTLE`, and
+  `BUDGET-CEILING-PER-ENV` all marked RESOLVED by PR-J.
+
 ### fix(tooling)+feat(docs): drill-bootstrap.sh Phase 3 closure + operator card (PR-I)
 
 The dev-02 drill run surfaced five gaps in PR-G's single-touch path —

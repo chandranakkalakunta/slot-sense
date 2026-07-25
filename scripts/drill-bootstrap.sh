@@ -497,9 +497,17 @@ phase2() {
   fi
 
   log "Running: firebase projects:addfirebase ${PROJECT_ID}"
-  if ! firebase projects:addfirebase "${PROJECT_ID}" 2>&1 | tee -a "${CMDLOG_FILE}" | grep -qiE "already|success|Firebase resources"; then
-    log "WARNING: addfirebase output was not clearly a success/already-added — check ${CMDLOG_FILE}. Continuing (idempotent by design)."
+  firebase projects:addfirebase "${PROJECT_ID}" 2>&1 | tee -a "${CMDLOG_FILE}" || true
+  # The command genuinely can exit non-zero on "already added" in some
+  # firebase-tools versions — the `|| true` above is deliberate. Wording
+  # in its stdout is not a stable success signal across CLI versions
+  # (dev-03 drill: WARNING fired despite Firebase being correctly
+  # enabled), so verify via projects:list instead — a stable API-shaped,
+  # ground-truth check.
+  if ! firebase projects:list 2>/dev/null | grep -q "${PROJECT_ID}"; then
+    fail 2 "Firebase resources not detected on project after addfirebase. Check ${CMDLOG_FILE}."
   fi
+  log "Verified: Firebase resources present on ${PROJECT_ID}."
 
   log "NOTE: Email/Password sign-in provider is Terraform-managed (google_identity_platform_config.auth, PR-F)."
   log "      No manual console step is needed — it is created by the Phase 6 main apply."
@@ -765,7 +773,12 @@ phase7() {
 }
 
 # ─── PHASE 8 — Verification ──────────────────────────────────────────────
+# OVERALL_VERIFY_OK is global (not a phase8 local) so main() can read it
+# after phase9 has run — Phase 9 MUST always run when Phase 8 was
+# entered, even when a check below fails, so the fail-8 decision is
+# deferred to main() instead of exiting from inside this function.
 VERIFY_RESULTS=()
+OVERALL_VERIFY_OK=1
 
 phase8() {
   local t0 t1
@@ -777,8 +790,6 @@ phase8() {
     t1=$(date +%s); record_elapsed 8 "Verification" "$((t1 - t0))"
     return 0
   fi
-
-  local overall_ok=1
 
   log "Checking newest Cloud Run revision is Ready and serving 100% traffic..."
   local ready traffic_pct
@@ -792,41 +803,64 @@ phase8() {
   else
     VERIFY_RESULTS+=("FAIL: newest revision Ready='${ready}' traffic='${traffic_pct}'")
     log "FAIL: newest revision Ready='${ready}' traffic='${traffic_pct}'"
-    overall_ok=0
+    OVERALL_VERIFY_OK=0
   fi
 
+  # Log check — capture exit status separately so a failed gcloud call
+  # doesn't kill the script under pipefail (auth expiry mid-run, logging
+  # API not yet queryable on a freshly created project, network hiccup —
+  # all observed or plausible on a live drill). Treat "cannot query logs
+  # yet" as WARN-and-continue, not fatal.
   log "Checking Cloud Run logs since deploy for WARNING+ entries..."
-  local warn_count
-  warn_count="$(gcloud logging read \
+  local logs_out logs_exit=0
+  logs_out="$(mktemp)"
+  gcloud logging read \
     "resource.type=cloud_run_revision AND resource.labels.service_name=sport-slot-api AND severity>=WARNING AND timestamp>=\"${DEPLOY_START_TS}\"" \
-    --project="${PROJECT_ID}" --format='value(timestamp)' 2>/dev/null | wc -l | tr -d ' ')"
-  if [[ "${warn_count}" -eq 0 ]]; then
-    VERIFY_RESULTS+=("PASS: zero WARNING+ log entries since deploy")
-    log "PASS: zero WARNING+ log entries since deploy"
+    --project="${PROJECT_ID}" --format='value(timestamp)' \
+    > "${logs_out}" 2>&1 || logs_exit=$?
+  if [[ ${logs_exit} -ne 0 ]]; then
+    VERIFY_RESULTS+=("WARN: could not query Cloud Run logs (exit ${logs_exit}) — see ${CMDLOG_FILE}")
+    log "WARN: could not query Cloud Run logs (exit ${logs_exit}) — continuing to Phase 9"
+    cat "${logs_out}" >> "${CMDLOG_FILE}"
   else
-    VERIFY_RESULTS+=("FAIL: ${warn_count} WARNING+ log entries since deploy")
-    log "FAIL: ${warn_count} WARNING+ log entries since deploy"
-    overall_ok=0
+    local warn_count
+    warn_count="$(wc -l < "${logs_out}" | tr -d ' ')"
+    if [[ ${warn_count} -eq 0 ]]; then
+      VERIFY_RESULTS+=("PASS: zero WARNING+ log entries since deploy")
+      log "PASS: zero WARNING+ log entries since deploy"
+    else
+      VERIFY_RESULTS+=("FAIL: ${warn_count} WARNING+ log entries since deploy")
+      log "FAIL: ${warn_count} WARNING+ log entries since deploy"
+      OVERALL_VERIFY_OK=0
+    fi
   fi
+  rm -f "${logs_out}"
 
+  # Same treatment for the plan check: terraform's own exit codes already
+  # distinguish "ran fine, changes pending" (2, a real FAIL) from "crashed"
+  # (anything else nonzero — auth expiry, backend transient). Only the
+  # crash case is WARN-and-continue.
   log "Checking terraform plan shows no changes..."
   local plan_exit=0
   (cd "${TF_DIR}" && terraform plan -var-file="${TFVARS_NAME}" -detailed-exitcode) \
     >>"${CMDLOG_FILE}" 2>&1 || plan_exit=$?
-  if [[ "${plan_exit}" -eq 0 ]]; then
-    VERIFY_RESULTS+=("PASS: terraform plan shows no changes")
-    log "PASS: terraform plan shows no changes"
-  else
-    VERIFY_RESULTS+=("FAIL: terraform plan exited ${plan_exit} (0=no changes, 2=changes pending) — see ${CMDLOG_FILE}")
-    log "FAIL: terraform plan exited ${plan_exit} — see ${CMDLOG_FILE}"
-    overall_ok=0
-  fi
+  case "${plan_exit}" in
+    0)
+      VERIFY_RESULTS+=("PASS: terraform plan shows no changes")
+      log "PASS: terraform plan shows no changes"
+      ;;
+    2)
+      VERIFY_RESULTS+=("FAIL: terraform plan shows pending changes (exit 2) — see ${CMDLOG_FILE}")
+      log "FAIL: terraform plan shows pending changes (exit 2) — see ${CMDLOG_FILE}"
+      OVERALL_VERIFY_OK=0
+      ;;
+    *)
+      VERIFY_RESULTS+=("WARN: terraform plan could not run cleanly (exit ${plan_exit}) — see ${CMDLOG_FILE}")
+      log "WARN: terraform plan could not run cleanly (exit ${plan_exit}) — continuing to Phase 9"
+      ;;
+  esac
 
   t1=$(date +%s); record_elapsed 8 "Verification" "$((t1 - t0))"
-
-  if [[ "${overall_ok}" -ne 1 ]]; then
-    fail 8 "one or more verification checks failed — see results above. Not claiming success."
-  fi
 }
 
 # ─── PHASE 9 — Output manifest ──────────────────────────────────────────
@@ -964,6 +998,19 @@ main() {
     fi
   fi
 
+  # Firebase CLI tokens expire faster than ADC (~1h idle) and are not
+  # covered by the ADC preflight above — caught mid-run (Phase 7
+  # firebase deploy) on the dev-03 live drill instead of at the start.
+  if [[ "${DRY_RUN}" -eq 0 ]]; then
+    if ! firebase projects:list >/dev/null 2>&1; then
+      echo "ERROR: Firebase CLI credentials are not valid." >&2
+      echo "Fix by running:" >&2
+      echo "  firebase login --reauth" >&2
+      echo "Then re-run this script." >&2
+      exit 1
+    fi
+  fi
+
   phase0
   [[ "${START_PHASE}" -le 1 ]] && phase1
   [[ "${START_PHASE}" -le 2 ]] && phase2
@@ -973,7 +1020,16 @@ main() {
   [[ "${START_PHASE}" -le 6 ]] && phase6
   [[ "${START_PHASE}" -le 7 ]] && phase7
   [[ "${START_PHASE}" -le 8 ]] && phase8
+  # Phase 9 (manifest write) MUST run whenever Phase 8 was entered, even
+  # if one or more of its checks failed — an environment built but
+  # missing its manifest is worse than one whose manifest records which
+  # checks to verify manually. The fail-8 decision is therefore deferred
+  # until after phase9 completes, not made from inside phase8.
   [[ "${START_PHASE}" -le 9 ]] && phase9
+
+  if [[ "${OVERALL_VERIFY_OK}" -ne 1 ]]; then
+    fail 8 "one or more verification checks failed — see manifest and results above."
+  fi
 
   banner "DONE"
   if [[ "${DRY_RUN}" -eq 1 ]]; then

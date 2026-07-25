@@ -16,6 +16,26 @@ resource "google_project_service" "billingbudgets" {
   disable_on_destroy = false
 }
 
+# Budget ceiling parameterized by var.environment (PR-J) — the original
+# PR-4 resource hardcoded dev-scale values, which would have silently
+# applied the ₹5K dev ceiling to a prod environment's first apply.
+# Prod amounts below are placeholders only — see TODO on the map.
+locals {
+  budget_amounts_inr = {
+    "dev"  = "5000"
+    "test" = "5000"
+    # TODO(prod): confirm ceiling with Coordinator before first prod apply.
+    "prod-india" = "5000"
+    "prod-uae"   = "5000"
+  }
+  budget_display_names = {
+    "dev"        = "SlotSense dev ceiling (ADR-0005)"
+    "test"       = "SlotSense test ceiling (ADR-0005)"
+    "prod-india" = "SlotSense prod-india ceiling (ADR-0005)"
+    "prod-uae"   = "SlotSense prod-uae ceiling (ADR-0005)"
+  }
+}
+
 # billing_account_id / project_number: discovered and verified read-only
 # (PR-4 Step 1), not guessed —
 #   gcloud billing projects describe sport-slot-dev \
@@ -29,7 +49,7 @@ resource "google_project_service" "billingbudgets" {
 
 resource "google_billing_budget" "slotsense_dev_ceiling" {
   billing_account = var.billing_account_id
-  display_name    = "SlotSense dev ceiling (ADR-0005)"
+  display_name    = local.budget_display_names[var.environment]
 
   budget_filter {
     projects = ["projects/${var.project_number}"]
@@ -49,7 +69,7 @@ resource "google_billing_budget" "slotsense_dev_ceiling" {
   amount {
     specified_amount {
       currency_code = "INR"
-      units         = "5000"
+      units         = local.budget_amounts_inr[var.environment]
     }
   }
 
