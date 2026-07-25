@@ -6,6 +6,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### feat(tooling): drill-bootstrap.sh — single-command environment build (PR-G)
+
+DR drill Pass 1 proved the rebuild sequence manually; PR-B/C/D/E/F
+codified every config gap it found. This closes `DRILL-BOOTSTRAP-SCRIPT`:
+the proven sequence is now one command instead of a runbook a human has
+to execute by hand.
+
+- **`scripts/drill-bootstrap.sh`** (new): implements
+  `docs/runbooks/disaster-recovery.md` §4.1 end to end — project
+  create/billing link (with retry), 3 bootstrap APIs, tfstate bucket,
+  generated per-environment `terraform/<project_id>.tfvars`,
+  `firebase projects:addfirebase`, the bootstrap-group `terraform apply`
+  (APIs + Artifact Registry + Cloud Build IAM + staging bucket + Redis +
+  secret shells), image build (`build_push.sh`), secret value population
+  (redis-auth, resend-api-key), the main apply, Firestore rules/indexes,
+  frontend build + Hosting + GCS sync, platform-admin seeding, and a
+  verification pass (revision Ready/100% traffic, zero WARNING+ logs
+  since deploy, `terraform plan` clean). Writes a gitignored
+  `bootstrap-output-<project_id>-<timestamp>.md` manifest with the LB
+  IP, DNS records, Cloud Run URL, temp admin password, and the
+  `scripts/tf.sh` registry entry to add. `--dry-run` validates inputs
+  and prints the plan with zero gcloud/terraform/firebase calls;
+  `--start-phase N` resumes a failed run using a gitignored per-project
+  state cache so flags don't need to be repeated.
+- **Verification finding (not previously spec'd):**
+  `terraform/cloud_run.tf`'s `SPORTSLOT_WORKER_BASE_URL` env var is
+  hardcoded to the live sport-slot-dev Cloud Run URL, not derived from
+  any variable — a new environment's first Terraform-created revision
+  would otherwise self-reference the wrong (existing dev) service. The
+  script adds a corrective step right after the main apply, reusing the
+  existing `scripts/deploy_cloud_run.sh` (the same script CI already
+  runs after every Terraform apply in production) so the URL
+  self-corrects once the service exists — no `.tf` changes.
+- **`.gitignore`**: added `bootstrap-output-*.md`,
+  `.drill-bootstrap-state-*.env`, `.drill-bootstrap-*.cmdlog`,
+  `.drill-bootstrap-*.timing`.
+- **`docs/runbooks/disaster-recovery.md`**: §4.1 now points at the
+  script as the primary rebuild path; the manual procedure remains the
+  documented fallback and the spec the script implements.
+- **`docs/backlog.md`**: `DRILL-BOOTSTRAP-SCRIPT` marked resolved.
+
 ### feat(tf): codify Firebase auth provider; make SMS alert channel conditional (PR-F)
 
 Environment Provisioning Spec GAP 2.2 and 2.3 — two manual console
