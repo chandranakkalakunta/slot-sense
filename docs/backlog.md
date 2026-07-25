@@ -10,7 +10,7 @@ traceability record.
 **Entry convention:** `[ID] status — one-line what & why. Blocker. Ref.`
 Status ∈ `OPEN` · `BLOCKED` · `IN PROGRESS` · `✓ DONE — Phase X / PR #n`.
 
-_Last updated: 2026-07-23_
+_Last updated: 2026-07-25_
 
 **Phase 17 (Production Readiness) is build-complete** — all ten
 2026-07-13 baseline audit findings resolved (PR-1a → PR-5c). The
@@ -399,6 +399,41 @@ remaining item for formal phase close. See
   You Recommend) and §0.1 item 13. The protocol update is out-of-band
   with slot-sense repo and is not part of PR-I; referenced here for
   traceability.
+- **PHASE-8-SILENT-EXIT · RESOLVED by PR-J (2026-07-25)** — Phase 8's
+  `gcloud logging read | wc -l` pipeline and the `terraform plan
+  -detailed-exitcode` check could die silently under `set -euo
+  pipefail` on a transient failure (auth expiry mid-run, logging API
+  not yet queryable on a freshly created project, network hiccup),
+  skipping Phase 9 entirely. On dev-03 (2026-07-25) this left the
+  environment built but without the bootstrap-output manifest. PR-J
+  captures both commands' exit statuses separately, treats transient
+  failures as WARN-and-continue, and moves the phase8 fail decision to
+  `main()` so Phase 9 always runs once Phase 8 is entered. Ref:
+  `scripts/drill-bootstrap.sh` phase8/main.
+- **PHASE-0-FIREBASE-PREFLIGHT · RESOLVED by PR-J (2026-07-25)** —
+  PR-I's Phase 0 preflight checked gcloud ADC only. Firebase CLI
+  tokens expire faster (~1h idle) and were not checked, killing
+  Phase 7's `firebase deploy` mid-run on the dev-03 drill. PR-J adds
+  a `firebase projects:list` preflight in `main()` alongside the ADC
+  check, hard-failing with a `firebase login --reauth` instruction.
+  Ref: `scripts/drill-bootstrap.sh` main, `docs/runbooks/
+  provision-environment.md`.
+- **PHASE-2-STDOUT-MATCH-BRITTLE · RESOLVED by PR-J (2026-07-25)** —
+  Phase 2's `firebase projects:addfirebase` success check
+  pattern-matched CLI stdout wording ("already|success|Firebase
+  resources"), which is unstable across firebase-tools versions — the
+  WARNING fired on dev-03 despite Firebase being correctly enabled.
+  PR-J replaces it with a ground-truth `firebase projects:list` check
+  for the project ID. Ref: `scripts/drill-bootstrap.sh` phase2.
+- **BUDGET-CEILING-PER-ENV · RESOLVED by PR-J (2026-07-25)** —
+  `terraform/cost.tf`'s `google_billing_budget.slotsense_dev_ceiling`
+  hardcoded `display_name`/`amount` to dev-scale (₹5,000, "SlotSense
+  dev ceiling") regardless of which environment it was applied to — a
+  non-drill config gap that would have silently bitten prod. PR-J adds
+  `local.budget_amounts_inr` / `local.budget_display_names` maps keyed
+  by `var.environment`; prod values are placeholders pending Coordinator
+  confirmation (see the `TODO(prod)` comment in `cost.tf`). Resource
+  address unchanged (no destroy/recreate). Ref: `terraform/cost.tf`.
 
 ---
 

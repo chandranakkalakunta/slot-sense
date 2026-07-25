@@ -143,6 +143,23 @@ resume:
 scripts/drill-bootstrap.sh --project-id <new> --start-phase 3 --yes
 ```
 
+### "Authentication Error / Your credentials are no longer valid" (Firebase CLI)
+
+Firebase CLI tokens expire faster than gcloud ADC (~1 hour idle). This
+can hit mid-run — on the dev-03 drill it killed Phase 7's
+`firebase deploy` about 30 minutes in. Post-PR-J, a Phase 0 preflight
+(`firebase projects:list`) catches this before the run starts; if you
+still hit it mid-run (token expired during a long-running phase):
+
+Fix:
+```
+firebase login --reauth
+```
+Then resume from the phase that failed:
+```
+scripts/drill-bootstrap.sh --project-id <new> --start-phase <N> --yes
+```
+
 ## Post-run manual tail
 
 1. **Handle the manifest.** The run writes
