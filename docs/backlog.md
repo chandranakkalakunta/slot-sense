@@ -313,14 +313,18 @@ remaining item for formal phase close. See
   Found in DR drill Pass 1 (finding #9). Ref:
   `docs/runbooks/DRILL-pass1-report.md`,
   `docs/runbooks/disaster-recovery.md` §4.1 step 5.
-- **DRILL-BOOTSTRAP-SCRIPT · OPEN** — Encode the now-proven rebuild
-  sequence (project create → billing link → bootstrap APIs → state
-  bucket → `terraform init -backend-config` → firebase add → SMS
-  channel → bootstrap-group apply → secret population → image build →
-  main apply → admin bootstrap → health verify → clean-plan check)
-  into an idempotent, retry-safe `drill-bootstrap.sh`. A timed,
-  uninterrupted run of that script is what produces the authoritative
-  RTO measurement. Ref: `docs/runbooks/DRILL-pass1-report.md`.
+- **DRILL-BOOTSTRAP-SCRIPT · RESOLVED by PR-G (2026-07-25)** — Encoded
+  the proven rebuild sequence (project create → billing link →
+  bootstrap APIs → state bucket → `terraform init -backend-config` →
+  firebase add → bootstrap-group apply → image build → secret
+  population → main apply → corrective deploy → Firestore
+  rules/indexes → frontend build+deploy → admin bootstrap →
+  verification) into `scripts/drill-bootstrap.sh` — idempotent,
+  `--start-phase N` resumable, `--dry-run` validates with zero live
+  calls. A timed, uninterrupted run of that script is what produces the
+  authoritative RTO measurement (still outstanding — see
+  `DRILL-PASS-2`). Ref: `docs/runbooks/DRILL-pass1-report.md`,
+  `docs/runbooks/disaster-recovery.md` §4.1.
 - **DRILL-PASS-2 · OPEN** — Firestore export/import and cross-project
   backup-restore TODOs, Firebase Auth export/import with hash params,
   and DNS/cert cutover — deferred from DR drill Pass 1 (which covered

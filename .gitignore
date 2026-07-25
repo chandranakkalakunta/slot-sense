@@ -103,6 +103,13 @@ secrets/
 # Cloud Build
 .last_image_tag
 
+# drill-bootstrap.sh (PR-G) — per-environment output manifests (contain a
+# temp admin password), state cache, and command logs.
+bootstrap-output-*.md
+.drill-bootstrap-state-*.env
+.drill-bootstrap-*.cmdlog
+.drill-bootstrap-*.timing
+
 # OS
 Thumbs.db
 .DS_Store

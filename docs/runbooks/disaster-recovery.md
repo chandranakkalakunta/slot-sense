@@ -4,7 +4,7 @@
   are complete where facts are known; drill execution and
   TODO-Coordinator items are outstanding.
 - **Governing ADR:** [ADR-0038](../adr/ADR-0038-backup-and-disaster-recovery.md)
-- **Last updated:** 2026-07-23
+- **Last updated:** 2026-07-25
 
 ## 1. Scope, RTO/RPO, disaster classes
 
@@ -164,6 +164,17 @@ Memorystore Redis instance, the Artifact Registry repository) so that
 project. See ADR-0038 §Layer 3 for the design rationale.
 
 ### 4.1 Rebuild procedure (new project)
+
+**Primary path:** `scripts/drill-bootstrap.sh` (PR-G) encodes every step
+below into one idempotent, resumable command — run
+`scripts/drill-bootstrap.sh --help` for usage, or `--dry-run` to see the
+plan without touching gcloud/terraform/firebase. It writes a
+`bootstrap-output-<project_id>-<timestamp>.md` manifest (gitignored) with
+the LB IP, DNS records, Cloud Run URL, admin credentials, and the
+`scripts/tf.sh` registry entry to add. The manual steps below remain the
+documented fallback and the source of truth the script implements — use
+them if the script itself needs debugging, or for any step it doesn't
+cover (DNS, cert wait, per-env CI wiring).
 
 Order matters — several steps have a bootstrapping dependency on the
 step before them.
