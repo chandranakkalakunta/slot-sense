@@ -434,7 +434,7 @@ phase1() {
 
   gcloud config set project "${PROJECT_ID}" >/dev/null || fail 1 "gcloud config set project failed."
   gcloud auth application-default set-quota-project "${PROJECT_ID}" >/dev/null 2>&1 \
-    || log "WARNING: could not set ADC quota project (non-fatal — continuing)."
+    || log "INFO: could not set ADC quota project (already checked healthy in Phase 0 preflight)."
 
   PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
   [[ -n "${PROJECT_NUMBER}" ]] || fail 1 "could not resolve project_number."
@@ -515,27 +515,47 @@ phase2() {
 phase3() {
   local t0 t1
   t0=$(date +%s)
-  banner "PHASE 3 — Bootstrap-group apply (includes Redis — this will take ~10 minutes)"
+  banner "PHASE 3 — Bootstrap-group apply (API enable + propagation wait + resource creation, ~11 minutes total)"
 
-  local targets=(
+  local targets_3a=(
     "-target=google_project_service.enabled_apis"
+  )
+  local targets_3b=(
     "-target=google_artifact_registry_repository.sport_slot_repo"
     "-target=google_project_iam_member.compute_sa_cloudbuild_builder"
     "-target=google_storage_bucket.cloudbuild_staging"
     "-target=google_redis_instance.sport_slot_redis"
     "-target=google_secret_manager_secret.redis_auth"
     "-target=google_secret_manager_secret.resend_api_key"
+    "-target=google_service_account.cloud_build"
+    "-target=google_project_iam_member.cloud_build_artifactregistry_writer"
+    "-target=google_project_iam_member.cloud_build_logging_log_writer"
+    "-target=google_project_iam_member.cloud_build_run_developer"
+    "-target=google_storage_bucket_iam_member.cloud_build_staging_object_admin"
   )
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    log "[dry-run] would run: terraform apply -var-file=${TFVARS_NAME} -auto-approve ${targets[*]}"
+    banner "PHASE 3a — API enablement"
+    log "[dry-run] would run: terraform apply -var-file=${TFVARS_NAME} -auto-approve ${targets_3a[*]}"
+    log "[dry-run] Waiting 60s for Google API propagation"
+    banner "PHASE 3b — Resource creation (Redis + Cloud Build SA/IAM + secret shells)"
+    log "[dry-run] would run: terraform apply -var-file=${TFVARS_NAME} -auto-approve ${targets_3b[*]}"
     t1=$(date +%s); record_elapsed 3 "Bootstrap-group apply" "$((t1 - t0))"
     return 0
   fi
 
+  banner "PHASE 3a — API enablement"
+  log "Running: terraform apply -var-file=${TFVARS_NAME} -auto-approve ${targets_3a[*]}"
+  (cd "${TF_DIR}" && terraform apply -var-file="${TFVARS_NAME}" -auto-approve "${targets_3a[@]}") \
+    || fail 3 "Phase 3a (API enablement) apply failed."
+
+  log "Waiting 60s for Google API propagation"
+  sleep 60
+
+  banner "PHASE 3b — Resource creation (includes Redis — this will take ~9-10 minutes)"
   log "This will take a while (Redis instance creation is ~9-10 minutes). Please wait..."
-  (cd "${TF_DIR}" && terraform apply -var-file="${TFVARS_NAME}" -auto-approve "${targets[@]}") \
-    || fail 3 "bootstrap-group apply failed."
+  (cd "${TF_DIR}" && terraform apply -var-file="${TFVARS_NAME}" -auto-approve "${targets_3b[@]}") \
+    || fail 3 "Phase 3b (resource creation) apply failed."
 
   t1=$(date +%s); record_elapsed 3 "Bootstrap-group apply" "$((t1 - t0))"
 }
@@ -932,6 +952,16 @@ main() {
     require_bin jq
     require_bin pnpm
     require_bin uv
+  fi
+
+  if [[ "${DRY_RUN}" -eq 0 ]]; then
+    if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
+      echo "ERROR: Application Default Credentials are not valid." >&2
+      echo "Fix by running:" >&2
+      echo "  gcloud auth application-default login" >&2
+      echo "Then re-run this script." >&2
+      exit 1
+    fi
   fi
 
   phase0
