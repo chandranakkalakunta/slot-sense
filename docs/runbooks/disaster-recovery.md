@@ -249,7 +249,13 @@ step before them.
    repo, the Cloud Build staging bucket
    (`google_storage_bucket.cloudbuild_staging`), and the Cloud Build
    SA IAM bindings are all created in this same apply pass (DR drill
-   Pass 1, findings #2 and #8). Terraform cannot create a Cloud Run
+   Pass 1, findings #2 and #8). `scripts/setup_build_infra.sh` — the
+   imperative script that previously granted `sa-cloud-build`'s
+   bucket-level `storage.objectAdmin` on the staging bucket (hardcoded
+   to `sport-slot-dev`, never codified) — is retired 2026-07-25 by
+   PR-I; that binding is now
+   `google_storage_bucket_iam_member.cloud_build_staging_object_admin`
+   in `terraform/iam.tf`, created in this same apply pass. Terraform cannot create a Cloud Run
    revision pointing at an image that doesn't exist.
 7. **Build and push at least one image** into the newly created
    `sport-slot-repo`, e.g. via a manual `gcloud builds submit --tag

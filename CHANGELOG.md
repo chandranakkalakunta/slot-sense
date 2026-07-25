@@ -6,6 +6,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### fix(tooling)+feat(docs): drill-bootstrap.sh Phase 3 closure + operator card (PR-I)
+
+The dev-02 drill run surfaced five gaps in PR-G's single-touch path —
+all root-caused to memory-based assumptions about IAM closure that
+reading terraform/iam.tf + scripts/setup_build_infra.sh directly would
+have caught. PR-I closes them and adds the one-page operator card for
+future provisioning.
+
+- **terraform/iam.tf**: authored
+  google_storage_bucket_iam_member.cloud_build_staging_object_admin —
+  grants sa-cloud-build roles/storage.objectAdmin on the staging
+  bucket. Previously held only by scripts/setup_build_infra.sh
+  (imperative, hardcoded, never codified). Without it,
+  gcloud builds submit --service-account=sa-cloud-build in Phase 4
+  gets a 403 on storage.objects.get.
+- **scripts/drill-bootstrap.sh Phase 3**: target list expanded from 7
+  to 12 (adds google_service_account.cloud_build plus its four IAM
+  bindings including the new one). Split into 3a (APIs only) + 60s
+  propagation wait + 3b (resources) to prevent the Google API
+  propagation race that hit Secret Manager on dev-02.
+- **scripts/drill-bootstrap.sh Phase 0**: added ADC readiness
+  preflight (gcloud auth application-default print-access-token) with
+  hard-fail and clear "run gcloud auth application-default login"
+  instruction. Replaces the misleading warn-and-continue behaviour
+  that hid an ADC failure right before terraform init died on it.
+- **scripts/build_push.sh**: removed sport-slot-dev fallback for
+  SLOTSENSE_PROJECT. Now hard-fails if unset. Prior behaviour allowed
+  accidental invocation against production.
+- **scripts/setup_build_infra.sh**: deleted. Sole unique action (the
+  bucket IAM) codified in iam.tf. Other actions already codified.
+- **docs/runbooks/provision-environment.md**: new one-page operator
+  card. Preflight commands with expected outputs; the two commands to
+  run; four Known failure scenarios with one-line fixes; post-run
+  manual tail (manifest, DNS records for Pattern B labels, cert wait,
+  tf.sh registry). Aimed at operator with no SlotSense context.
+- **docs/runbooks/disaster-recovery.md**: setup_build_infra.sh
+  retirement noted.
+- **docs/backlog.md**: added 6 RESOLVED-by-PR-I entries, 1
+  RESOLVED-by-v3.9 entry, 1 new OPEN item
+  (TERRAFORM-API-PROPAGATION-TIME-SLEEP — the script split is a
+  workaround; the Terraform-native fix affects production applies and
+  is deferred).
+- **Protocol** (out-of-band, org-level document): v3.9 adopted
+  alongside PR-I — new §0.1 item 13 and §4.14 (Read Before You
+  Recommend), §5.35 failure pattern.
+
 ### fix(tooling): drill-bootstrap.sh hardening (PR-H)
 
 Strategist's post-merge diff review of PR-G #164 surfaced five gaps to

@@ -204,3 +204,19 @@ resource "google_project_iam_member" "compute_sa_cloudbuild_builder" {
   member     = "serviceAccount:${var.project_number}-compute@developer.gserviceaccount.com"
   depends_on = [google_project_service.enabled_apis]
 }
+
+# sa-cloud-build needs bucket-level storage.objectAdmin on the
+# Cloud Build staging bucket to read source tarballs its own
+# gcloud builds submit uploads. Historically granted imperatively
+# by scripts/setup_build_infra.sh (hardcoded to sport-slot-dev,
+# never codified) — a fresh project rebuild fails at
+# build_push.sh Phase 4 without this. Codified here so a bare
+# terraform apply produces a complete, working project.
+# DR drill dev-02 finding (2026-07-25); setup_build_infra.sh
+# retired in the same PR.
+resource "google_storage_bucket_iam_member" "cloud_build_staging_object_admin" {
+  bucket     = google_storage_bucket.cloudbuild_staging.name
+  role       = "roles/storage.objectAdmin"
+  member     = "serviceAccount:${google_service_account.cloud_build.email}"
+  depends_on = [google_storage_bucket.cloudbuild_staging]
+}

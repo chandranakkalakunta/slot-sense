@@ -344,6 +344,61 @@ remaining item for formal phase close. See
   second-phase apply. Logged per §4.13 (Phase 6b is interim; root
   cause named). Ref: `scripts/drill-bootstrap.sh` phase6/6b,
   `terraform/cloud_run.tf`.
+- **BOOTSTRAP-GROUP-SA-IAM-CLOSURE · RESOLVED by PR-I (2026-07-25)** —
+  drill-bootstrap.sh Phase 3's -target list did not include
+  google_service_account.cloud_build or its IAM bindings.
+  Phase 4's build_push.sh subsequently failed with "Unknown
+  service account" and then 403 on storage.objects.get. PR-I expands
+  the target list to 12 resources covering the full closure. Root
+  cause: scripts/setup_build_infra.sh (retired in same PR) had
+  granted the missing bucket IAM imperatively against sport-slot-dev,
+  never codified. Ref: PR-I.
+- **SETUP-BUILD-INFRA-RETIRED · RESOLVED by PR-I (2026-07-25)** —
+  scripts/setup_build_infra.sh (hardcoded PROJECT="sport-slot-dev")
+  was the sole holder of sa-cloud-build's staging bucket IAM. PR-I
+  codifies that binding into iam.tf as
+  google_storage_bucket_iam_member.cloud_build_staging_object_admin
+  and deletes the script. Other actions were already codified.
+- **BUILD-PUSH-SILENT-PROJECT-DEFAULT · RESOLVED by PR-I (2026-07-25)** —
+  scripts/build_push.sh defaulted PROJECT to "sport-slot-dev" when
+  SLOTSENSE_PROJECT was unset, allowing accidental invocation against
+  production. Fixed to hard-fail on missing env var.
+- **ADC-PREFLIGHT-CHECK · RESOLVED by PR-I (2026-07-25)** — Phase 1's
+  ADC set-quota-project warned-and-continued on failure, but ADC
+  failure guarantees terraform init fails on the next line. PR-I adds
+  Phase 0 preflight (gcloud auth application-default
+  print-access-token) that hard-fails with clear instructions.
+  Instance of §5.22.
+- **API-PROPAGATION-WAIT · RESOLVED by PR-I (2026-07-25)** — Phase 3's
+  single -target apply enabled Google APIs and then immediately
+  consumed them in the same run, hitting API propagation lag as
+  SERVICE_DISABLED errors. PR-I splits Phase 3 into 3a (APIs only) +
+  60s sleep + 3b (resources). A cleaner Terraform-native fix is
+  deferred — see TERRAFORM-API-PROPAGATION-TIME-SLEEP below.
+- **TERRAFORM-API-PROPAGATION-TIME-SLEEP · OPEN** — the Phase 3a/3b
+  split in drill-bootstrap.sh (PR-I) is a script-level workaround for
+  a Terraform-level race: any resource creation that consumes an API
+  immediately after google_project_service.enabled_apis enables it
+  can race. Proper fix is a time_sleep resource in terraform/ gating
+  all API-consuming resources on propagation completion. Deferred
+  because it affects every apply (including production CI), not just
+  fresh-project bootstrap.
+- **PROVISIONING-OPERATOR-CARD · RESOLVED by PR-I (2026-07-25)** —
+  docs/runbooks/provision-environment.md authored — one-page operator
+  card with preflight commands (expected outputs), the two-command
+  run, "Known failures" section covering the four propagation-family
+  issues from the dev-02 drill with one-line fixes, and post-run
+  manual tail (manifest handling, DNS records for Pattern B labels
+  rvrg-dev/rvrg-test/rvrg, cert wait, tf.sh registry). Aimed at
+  operator with no SlotSense context. Technical reference remains
+  disaster-recovery.md.
+- **BOOTSTRAP-VERIFICATION-INCLUDES-DEPENDENCY-CLOSURE · RESOLVED by
+  protocol v3.9 (2026-07-25)** — the pattern of naming
+  resources/bindings/behaviours from memory instead of reading the
+  .tf files directly is captured in protocol v3.9 §4.14 (Read Before
+  You Recommend) and §0.1 item 13. The protocol update is out-of-band
+  with slot-sense repo and is not part of PR-I; referenced here for
+  traceability.
 
 ---
 
