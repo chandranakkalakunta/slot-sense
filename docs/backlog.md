@@ -331,6 +331,19 @@ remaining item for formal phase close. See
   Layers 3/4/5 + minimal Layer 2 only). Ref:
   `docs/runbooks/DRILL-pass1-report.md`, `docs/runbooks/disaster-recovery.md`
   §1/§7/§8.
+- **CLOUD-RUN-WORKER-URL-COMPUTED · OPEN** — `terraform/cloud_run.tf`
+  (~line 139) hardcodes `SPORTSLOT_WORKER_BASE_URL` to sport-slot-dev's
+  live *.run.app URL. `env` is in `lifecycle.ignore_changes`, so
+  post-create drift is invisible; CI's `deploy_cloud_run.sh` corrects
+  the value on every deploy. But a bare `terraform apply` on a
+  fresh project bakes in the WRONG URL for the initial revision —
+  which is exactly why `scripts/drill-bootstrap.sh` Phase 6b (PR-G)
+  exists as the interim. Proper fix: initialize to empty and let
+  `deploy_cloud_run.sh` own the value exclusively, or compute it
+  from `google_cloud_run_v2_service.sport_slot_api.uri` on a
+  second-phase apply. Logged per §4.13 (Phase 6b is interim; root
+  cause named). Ref: `scripts/drill-bootstrap.sh` phase6/6b,
+  `terraform/cloud_run.tf`.
 
 ---
 

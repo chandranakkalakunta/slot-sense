@@ -19,6 +19,14 @@
 # continue. Per-project state (region/zone/env/tfvars path/image tag/etc.)
 # is cached in a gitignored state file so resume doesn't require re-passing
 # every flag.
+#
+# Intentional legacy resource names: this script hardcodes
+# sport-slot-redis, sport-slot-api, and (as the default artifact repo)
+# slot-sense-repo in several gcloud/terraform invocations below. The
+# sport-slot -> slot-sense migration renames PROJECT_ID, not the
+# terraform-owned resource names inside any given project — those stay
+# fixed regardless of which environment they're created in. Do not
+# "fix" these to track project_id.
 
 set -euo pipefail
 
@@ -589,6 +597,14 @@ phase5() {
     || fail 5 "populating resend-api-key secret failed."
   RESEND_API_KEY=""
 
+  # Intentional fail-loud: this check requires exactly 1 ENABLED version,
+  # not "at least 1". On a re-run against an environment that already has
+  # a version, silently adding another would leave two ENABLED versions
+  # with no automated way to know which one is correct — an automatic
+  # double-write here would be worse than stopping and making the
+  # operator decide. If a second version is genuinely intended (rotation),
+  # disable the prior version (`gcloud secrets versions disable`) and
+  # re-run this phase.
   for secret in redis-auth resend-api-key; do
     local enabled_count
     enabled_count="$(gcloud secrets versions list "${secret}" --project="${PROJECT_ID}" \
@@ -701,10 +717,22 @@ phase7() {
     || fail 7 "GCS sync (icons) failed."
 
   log "7c) Seeding platform admin..."
+  # Captured to an ephemeral, 600-permission file only — NEVER to
+  # CMDLOG_FILE (persistent, part of the report). seed_platform_admin.py
+  # prints the temp password verbatim to stdout; piping that through
+  # `tee -a "${CMDLOG_FILE}"` would leave it sitting in a log we keep
+  # around, which defeats the point of it being a one-time-print secret.
   local seed_log
   seed_log="$(mktemp)"
-  (cd "${REPO_ROOT}/backend" && uv run python scripts/seed_platform_admin.py --project "${PROJECT_ID}") \
-    | tee "${seed_log}" | tee -a "${CMDLOG_FILE}" || fail 7 "seed_platform_admin.py failed."
+  chmod 600 "${seed_log}"
+  if ! (cd "${REPO_ROOT}/backend" && uv run python scripts/seed_platform_admin.py --project "${PROJECT_ID}") \
+      > "${seed_log}" 2>&1; then
+    log "seed_platform_admin.py failed — see ${seed_log}"
+    cat "${seed_log}" >&2
+    rm -f "${seed_log}"
+    fail 7 "seed_platform_admin.py failed."
+  fi
+  log "seed_platform_admin.py succeeded (output captured to ephemeral file, not persistent log)."
 
   ADMIN_EMAIL_CAPTURED="$(grep -oE 'admin: [^ ]+@[^ ]+' "${seed_log}" | head -n1 | awk '{print $2}')"
   ADMIN_EMAIL_CAPTURED="${ADMIN_EMAIL_CAPTURED:-admin@chandraailabs.com}"
@@ -880,6 +908,8 @@ phase9() {
     echo "- Add the scripts/tf.sh registry entry above."
     echo ""
     echo "## Per-phase elapsed times (measured RTO)"
+    echo ""
+    echo "Note: Phase 6 timings include operator review time on the main \`terraform apply\` unless run with \`--yes\`. Use \`--yes\` for a comparable RTO measurement across runs."
     echo ""
     echo "| Phase | Elapsed |"
     echo "|---|---|"

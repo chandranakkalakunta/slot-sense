@@ -6,6 +6,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### fix(tooling): drill-bootstrap.sh hardening (PR-H)
+
+Strategist's post-merge diff review of PR-G #164 surfaced five gaps to
+close before the script's first live run against a fresh project.
+
+- **Phase 7c (admin seed)**: `seed_platform_admin.py`'s stdout — which
+  includes the temp admin password verbatim — was being piped through
+  `tee -a "${CMDLOG_FILE}"`, writing the password into the persistent
+  command log. Now captured to an ephemeral, `chmod 600` temp file only;
+  `CMDLOG_FILE` never sees it. `ADMIN_EMAIL_CAPTURED`/`ADMIN_TEMP_PASSWORD`
+  parsing unchanged.
+- **Phase 5**: added a comment explaining why "exactly 1 ENABLED
+  version" is a strict, fail-loud check rather than "at least 1" — an
+  automatic double-write of secret versions on re-run would be worse
+  than stopping and letting the operator decide (disable the prior
+  version and re-run if a second version is genuinely intended).
+- **Header block**: documented that `sport-slot-redis`, `sport-slot-api`,
+  and `slot-sense-repo` are intentionally hardcoded — the sport-slot ->
+  slot-sense migration renames `PROJECT_ID`, not the terraform-owned
+  resource names inside any given project.
+- **Phase 9 output manifest**: added a caveat above the per-phase
+  elapsed-times table — Phase 6 timings include operator review time on
+  the interactive `terraform apply` unless run with `--yes`; use
+  `--yes` for a comparable RTO measurement across runs.
+- **`docs/backlog.md`**: added `CLOUD-RUN-WORKER-URL-COMPUTED` (open),
+  naming the root cause behind PR-G's Phase 6b corrective-deploy
+  workaround — `terraform/cloud_run.tf`'s `SPORTSLOT_WORKER_BASE_URL`
+  is hardcoded to sport-slot-dev's live URL rather than computed.
+
+No `.tf` files touched.
+
 ### feat(tooling): drill-bootstrap.sh — single-command environment build (PR-G)
 
 DR drill Pass 1 proved the rebuild sequence manually; PR-B/C/D/E/F
