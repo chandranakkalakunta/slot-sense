@@ -25,7 +25,7 @@
 #
 # Examples:
 #   scripts/tf.sh dev plan
-#   scripts/tf.sh dev-01 apply -target=google_project_service.enabled_apis
+#   scripts/tf.sh dev-03 apply -target=google_project_service.enabled_apis
 #   scripts/tf.sh dev import google_storage_bucket.foo my-bucket
 #
 # Adding an environment: add ONE case arm to env_lookup() below — no other
@@ -42,7 +42,7 @@ LOG_FILE="${TF_DIR}/.tf.sh.log"
 # ENV_PROJECT_ID / ENV_BUCKET / ENV_PREFIX / ENV_VARFILE. Nothing else in
 # this script needs to change. Keep ENV_NAMES in sync — it drives --list
 # and unknown-env error messages.
-ENV_NAMES="dev dev-01"
+ENV_NAMES="dev dev-03"
 
 env_lookup() {
   case "$1" in
@@ -52,11 +52,11 @@ env_lookup() {
       ENV_PREFIX="terraform/state"
       ENV_VARFILE="terraform.tfvars"
       ;;
-    dev-01)
-      ENV_PROJECT_ID="slot-sense-dev-01"
-      ENV_BUCKET="slot-sense-dev-01-tfstate"
+    dev-03)
+      ENV_PROJECT_ID="slot-sense-dev-03"
+      ENV_BUCKET="slot-sense-dev-03-tfstate"
       ENV_PREFIX="terraform/state"
-      ENV_VARFILE="slot-sense-dev-01.tfvars"
+      ENV_VARFILE="slot-sense-dev-03.tfvars"
       ;;
     *)
       return 1
@@ -89,7 +89,7 @@ Usage:
 
 Examples:
   scripts/tf.sh dev plan
-  scripts/tf.sh dev-01 apply -target=google_project_service.enabled_apis
+  scripts/tf.sh dev-03 apply -target=google_project_service.enabled_apis
   scripts/tf.sh dev import google_storage_bucket.foo my-bucket
 
 No environment has a default — every invocation must name one explicitly.

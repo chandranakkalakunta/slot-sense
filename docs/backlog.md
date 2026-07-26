@@ -325,12 +325,39 @@ remaining item for formal phase close. See
   authoritative RTO measurement (still outstanding — see
   `DRILL-PASS-2`). Ref: `docs/runbooks/DRILL-pass1-report.md`,
   `docs/runbooks/disaster-recovery.md` §4.1.
-- **DRILL-PASS-2 · OPEN** — Firestore export/import and cross-project
-  backup-restore TODOs, Firebase Auth export/import with hash params,
-  and DNS/cert cutover — deferred from DR drill Pass 1 (which covered
-  Layers 3/4/5 + minimal Layer 2 only). Ref:
-  `docs/runbooks/DRILL-pass1-report.md`, `docs/runbooks/disaster-recovery.md`
-  §1/§7/§8.
+- **DRILL-PASS-2 · IN PROGRESS (2026-07-25/26)** — Timed rebuild of a
+  fresh dev environment (`slot-sense-dev-03`) via
+  `scripts/drill-bootstrap.sh --yes`: provisioned to a running Cloud Run
+  backend + deployed frontend + seeded admin in ~21 min, well inside the
+  4h RTO (ADR-0038). Post-run verified: Cloud Run Ready/100% traffic,
+  zero WARN+ logs, `terraform plan` = No changes, PITR + 7-day daily
+  backups + delete-protection active, ingress internal-and-LB only.
+  Remaining to close phase: DNS/cert cutover for
+  `rvrg-dev.slotsense.chandraailabs.com` (Namecheap A record + permanent
+  `_acme-challenge` CNAME → wildcard cert ACTIVE → `curl /health` == ok).
+  DESCOPED per 2026-07-25 Coordinator decision: Firestore export/import
+  and Firebase Auth export/import with hash params — there is NO data or
+  user migration from sport-slot-dev; dev-03 is populated with fresh data
+  manually. Ref: `docs/runbooks/provision-environment.md`,
+  `docs/runbooks/DRILL-pass1-report.md`,
+  `docs/runbooks/disaster-recovery.md` §1/§7/§8.
+- **DNS-PATTERN-B · ✓ LOCKED (2026-07-25)** — Per-env host labels under
+  the single `*.slotsense.chandraailabs.com` wildcard cert:
+  `rvrg-dev` (dev-03), `rvrg-test` (test), `rvrg` (prod, no prefix). One
+  wildcard cert covers all; no per-tenant/per-env certificate provisioning
+  as the platform grows. Forward-binding for test/prod provisioning.
+- **SPORT-SLOT-DEV-RETIRE · OPEN (Coordinator pace, no deadline)** —
+  dev-03 replaces sport-slot-dev as the standing dev env (2026-07-25
+  decision, replace-not-parallel). Retire only after dev-03 has enough
+  manually-populated data that the dev workflow is fully back: then
+  `gcloud projects delete sport-slot-dev`, remove its Namecheap DNS,
+  prune the `dev` arm from `scripts/tf.sh`, and drop the hardcoded
+  sport-slot-dev refs in `.github/workflows/deploy.yml` (ties to the
+  per-env CI wiring job / `CI-DEPLOY-CLOUD-RUN-DEFAULTS-ASYMMETRY`).
+- **TF-SH-REGISTRY-DEV-03 · ✓ DONE — Phase 17 / PR #169** —
+  `scripts/tf.sh` registers `dev-03`; the stale `dev-01` arm (deleted
+  project, local var-file removed) was pruned in the same change. The
+  `dev`/sport-slot-dev arm retained until SPORT-SLOT-DEV-RETIRE.
 - **CLOUD-RUN-WORKER-URL-COMPUTED · OPEN** — `terraform/cloud_run.tf`
   (~line 139) hardcodes `SPORTSLOT_WORKER_BASE_URL` to sport-slot-dev's
   live *.run.app URL. `env` is in `lifecycle.ignore_changes`, so
