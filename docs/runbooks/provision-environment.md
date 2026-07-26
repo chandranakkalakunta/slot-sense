@@ -1,24 +1,36 @@
 # Provision a new SlotSense environment
 
-One-page operator card. Assumes minimal SlotSense context. The
-authoritative technical reference is
-`docs/runbooks/disaster-recovery.md`; this card tells you what
-commands to run and what to do when they fail.
+One-page operator card (commands + failure table).
+
+**Prefer the full walkthrough if this is your first time:**
+[`create-environment-step-by-step.md`](./create-environment-step-by-step.md)
+— plain-English, start-to-finish checklist so a non-expert can bring an
+environment fully online (automated script + DNS + first login).
+
+Technical depth: [`disaster-recovery.md`](./disaster-recovery.md).
 
 ## What this does
 
-`scripts/drill-bootstrap.sh` builds a fresh GCP project end-to-end:
-project creation and billing link, API enablement, Terraform state
-bucket, Firebase addition, the bootstrap-group Terraform apply (Redis,
-Artifact Registry, Cloud Build SA/IAM, secret shells), a backend image
-build, secret value population, the main Terraform apply, Firestore
-rules/indexes, frontend build + Hosting deploy, and platform-admin
-seeding, ending in an automated verification pass. Total run time is
-roughly 45–60 minutes, most of it Redis instance creation (~9–10 min)
-and operator review time on the main `terraform apply` (skip the
-review with `--yes`). The result is a working Cloud Run backend +
-Firebase Hosting frontend, missing only DNS and certificate issuance
-(handled manually — see "Post-run manual tail" below).
+`scripts/drill-bootstrap.sh` builds a fresh GCP project end-to-end for
+**any** environment (`dev` / `test` / `prod-india` / `prod-uae`):
+
+project creation and billing link → API enablement → Terraform state
+bucket → Firebase project + **WEB app + public SDK config** →
+bootstrap-group Terraform apply (Redis, Artifact Registry, Cloud Build
+SA/IAM, secret shells, Email/Password Auth) → backend image build →
+secret value population → main Terraform apply → corrective Cloud Run
+deploy (project-scoped env vars) → Firestore rules/indexes →
+**frontend build with `VITE_FIREBASE_*` for the target project**
+(verified in `dist` and in GCS) → Hosting + frontend bucket sync →
+platform-admin seed against `--project` → `scripts/tf.sh` registry
+entry → automated verification.
+
+Total run time is roughly 45–60 minutes for a cold project (most of it
+Redis ~9–10 min); a resume or re-run on an existing project is much
+faster. Use `--yes` to skip interactive Terraform review. The result
+is a working Cloud Run backend + SPA that authenticates against **this
+project's** Firebase Auth — missing only DNS at the external registrar
+(see "Post-run manual tail").
 
 ## Prerequisites
 
@@ -160,6 +172,30 @@ Then resume from the phase that failed:
 scripts/drill-bootstrap.sh --project-id <new> --start-phase <N> --yes
 ```
 
+## What is automatic vs still manual
+
+| Step | Owner |
+|---|---|
+| GCP project, billing, APIs, state bucket | Script |
+| Firebase project + Email/Password provider | Script (+ Terraform) |
+| Firebase **WEB app** + SDK config | Script (Phase 2) |
+| Redis, secrets shells + values, Artifact Registry, IAM, LB, Cloud Run | Script |
+| Frontend build **wired to target Firebase project** | Script (Phase 7; fails if wrong `projectId` in dist) |
+| Hosting + `gs://<project>-frontend` sync | Script |
+| Platform admin seed (`--project` explicit) | Script |
+| `scripts/tf.sh` registry entry | Script (auto-edits; **commit** the diff) |
+| Namecheap DNS A + cert CNAME | **Manual** (external registrar) |
+| Password-manager capture of temp admin password | **Manual** |
+| GitHub Actions `deploy.yml` target project | **Manual** until CI is multi-env |
+
+Default hosts (Pattern B, overridable with flags):
+
+| `--environment` | Public host | Admin host |
+|---|---|---|
+| `dev` | `rvrg-dev.<base>` | `admin-dev.<base>` |
+| `test` | `rvrg-test.<base>` | `admin-test.<base>` |
+| `prod-india` / `prod-uae` | `rvrg.<base>` | `admin.<base>` |
+
 ## Post-run manual tail
 
 1. **Handle the manifest.** The run writes
@@ -167,31 +203,31 @@ scripts/drill-bootstrap.sh --project-id <new> --start-phase <N> --yes
    admin email and temp password into the password manager, then
    **delete the file**. (The manifest itself warns about this.)
 
-2. **Add a `tf.sh` registry entry.** Copy the entry block from the
-   manifest into `scripts/tf.sh` — add `"<env>"` to `ENV_NAMES` and
-   the corresponding `case` arm. Commit as a small PR.
+2. **Commit the `scripts/tf.sh` registry edit** the script made (if this
+   was a brand-new env name). No manual copy-paste of case arms.
 
-3. **Create DNS records at Namecheap** (values from the manifest):
-   - A record: `rvrg-<env>.slotsense.chandraailabs.com` → LB IP (or
-     `rvrg.slotsense.chandraailabs.com` for prod).
+3. **Create DNS records at Namecheap** (exact values are in the
+   manifest):
+   - A: public host (e.g. `rvrg-dev.slotsense.chandraailabs.com`) → LB IP
+   - A: admin host (e.g. `admin-dev.slotsense.chandraailabs.com`) → LB IP
    - CNAME for cert renewal: `<name>` → `<value>` — **permanent, do
      not delete**.
    The wildcard `*.slotsense.chandraailabs.com` cert already covers
-   `rvrg-dev`, `rvrg-test`, `rvrg` (one label under the wildcard) —
-   no new certificate request is needed for a standard dev/test
-   label.
+   one label under the domain — no new certificate request is needed
+   for standard Pattern B labels.
 
 4. **Wait for the cert to go ACTIVE** (~5–30 min after DNS
    propagates):
    ```
-   gcloud certificate-manager certificates describe <cert-name> --project=<new>
+   gcloud certificate-manager certificates describe slotsense-wildcard-cert --project=<new>
    ```
 
 5. **Verify end-to-end:**
    ```
-   curl -sf https://rvrg-<env>.slotsense.chandraailabs.com/health
+   curl -sf https://rvrg-dev.slotsense.chandraailabs.com/health   # example for dev
    ```
-   Should return `{"status":"ok"}`. Environment is ready.
+   Should return `{"status":"ok"}`. Then sign in at the public host
+   with the seeded admin credentials (fresh browser session).
 
 ## When it fails partway
 

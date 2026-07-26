@@ -82,6 +82,12 @@ STATE_FILE=""
 OUTPUT_FILE=""
 CMDLOG_FILE=""
 TIMING_FILE=""
+FIREBASE_WEB_CONFIG_FILE=""
+PUBLIC_HOST_LABEL=""
+REGISTRY_ENV_NAME=""
+ADMIN_HOST_EXPLICIT=0
+ADMIN_EMAIL_CAPTURED=""
+ADMIN_TEMP_PASSWORD=""
 
 # ─── Output helpers ──────────────────────────────────────────────────────
 timestamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
@@ -150,10 +156,272 @@ record_elapsed() {
   echo "Phase ${phase} (${label})|${seconds}s" >> "${TIMING_FILE}"
 }
 
+# ─── Multi-env host + registry helpers ──────────────────────────────────
+# DNS Pattern B (docs/backlog.md DNS-PATTERN-B): one wildcard cert covers
+# rvrg-dev / rvrg-test / rvrg under *.slotsense.chandraailabs.com.
+derive_public_host_label() {
+  case "$1" in
+    dev) echo "rvrg-dev" ;;
+    test) echo "rvrg-test" ;;
+    prod-india|prod-uae) echo "rvrg" ;;
+    *) echo "rvrg-dev" ;;
+  esac
+}
+
+# Per-env admin host so test/dev/prod can coexist under the same wildcard
+# without fighting over a single admin A-record.
+derive_admin_host() {
+  local env="$1" base="$2"
+  case "$env" in
+    dev) echo "admin-dev.${base}" ;;
+    test) echo "admin-test.${base}" ;;
+    prod-india|prod-uae) echo "admin.${base}" ;;
+    *) echo "admin.${base}" ;;
+  esac
+}
+
+# scripts/tf.sh registry key: sport-slot-dev → "dev"; slot-sense-dev-03 → "dev-03".
+derive_registry_env_name() {
+  local project_id="$1"
+  if [[ "${project_id}" == "sport-slot-dev" ]]; then
+    echo "dev"
+  elif [[ "${project_id}" == slot-sense-* ]]; then
+    echo "${project_id#slot-sense-}"
+  else
+    echo "${project_id}"
+  fi
+}
+
+# gcloud user ADC often needs an explicit quota project for Firebase REST.
+gcp_access_token() {
+  gcloud auth print-access-token
+}
+
+firebase_rest() {
+  # firebase_rest METHOD URL [curl -d args...]
+  local method="$1" url="$2"
+  shift 2
+  local token
+  token="$(gcp_access_token)" || return 1
+  curl -sS -X "${method}" \
+    -H "Authorization: Bearer ${token}" \
+    -H "x-goog-user-project: ${PROJECT_ID}" \
+    -H "Content-Type: application/json" \
+    "$@" \
+    "${url}"
+}
+
+wait_firebase_operation() {
+  local op_name="$1" deadline=180 waited=0
+  local op_json done
+  while [[ ${waited} -lt ${deadline} ]]; do
+    op_json="$(firebase_rest GET "https://firebase.googleapis.com/v1beta1/${op_name}")" || return 1
+    done="$(echo "${op_json}" | jq -r '.done // false')"
+    if [[ "${done}" == "true" ]]; then
+      if echo "${op_json}" | jq -e '.error' >/dev/null 2>&1; then
+        log "Firebase operation failed: $(echo "${op_json}" | jq -c '.error')"
+        return 1
+      fi
+      echo "${op_json}"
+      return 0
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  log "Firebase operation timed out after ${deadline}s: ${op_name}"
+  return 1
+}
+
+# Ensure a WEB app exists and write its public SDK config to
+# FIREBASE_WEB_CONFIG_FILE. Idempotent. Uses Firebase Management REST
+# (gcloud ADC) so a mid-run firebase CLI token expiry cannot skip this.
+ensure_firebase_web_app_config() {
+  local cfg="${FIREBASE_WEB_CONFIG_FILE}"
+  local list_json app_id create_json op_name op_json config_json
+
+  [[ -n "${cfg}" ]] || { log "FIREBASE_WEB_CONFIG_FILE unset"; return 1; }
+
+  if [[ -f "${cfg}" ]]; then
+    if jq -e --arg p "${PROJECT_ID}" '.projectId == $p and .apiKey and .appId' "${cfg}" >/dev/null 2>&1; then
+      log "Reusing cached Firebase web config at ${cfg}"
+      return 0
+    fi
+    log "Cached Firebase web config missing/stale — refreshing."
+  fi
+
+  log "Listing Firebase web apps on ${PROJECT_ID}..."
+  list_json="$(firebase_rest GET "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/webApps")" \
+    || { log "Failed to list Firebase web apps"; return 1; }
+  if echo "${list_json}" | jq -e '.error' >/dev/null 2>&1; then
+    log "List web apps error: $(echo "${list_json}" | jq -c '.error')"
+    return 1
+  fi
+
+  app_id="$(echo "${list_json}" | jq -r '.apps[0].appId // empty')"
+  if [[ -z "${app_id}" ]]; then
+    log "No web app on ${PROJECT_ID} — creating 'SlotSense Web'..."
+    create_json="$(firebase_rest POST "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/webApps" \
+      -d '{"displayName":"SlotSense Web"}')" \
+      || { log "Failed to create Firebase web app"; return 1; }
+    if echo "${create_json}" | jq -e '.error' >/dev/null 2>&1; then
+      log "Create web app error: $(echo "${create_json}" | jq -c '.error')"
+      return 1
+    fi
+    # Immediate response may already be the WebApp, or a long-running Operation.
+    app_id="$(echo "${create_json}" | jq -r '.appId // empty')"
+    if [[ -z "${app_id}" ]]; then
+      op_name="$(echo "${create_json}" | jq -r '.name // empty')"
+      [[ -n "${op_name}" ]] || { log "Create web app returned neither appId nor operation name: ${create_json}"; return 1; }
+      log "Waiting for web app create operation: ${op_name}"
+      op_json="$(wait_firebase_operation "${op_name}")" || return 1
+      app_id="$(echo "${op_json}" | jq -r '.response.appId // empty')"
+      [[ -n "${app_id}" ]] || { log "Operation completed without appId: ${op_json}"; return 1; }
+    fi
+    log "Created Firebase web app: ${app_id}"
+  else
+    log "Found existing Firebase web app: ${app_id}"
+  fi
+
+  log "Fetching Firebase web SDK config for ${app_id}..."
+  config_json="$(firebase_rest GET "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/webApps/${app_id}/config")" \
+    || { log "Failed to fetch web SDK config"; return 1; }
+  if echo "${config_json}" | jq -e '.error' >/dev/null 2>&1; then
+    log "SDK config error: $(echo "${config_json}" | jq -c '.error')"
+    return 1
+  fi
+  if ! echo "${config_json}" | jq -e --arg p "${PROJECT_ID}" \
+      '.projectId == $p and .apiKey and .appId and .authDomain' >/dev/null 2>&1; then
+    log "SDK config incomplete or wrong project: ${config_json}"
+    return 1
+  fi
+
+  umask 077
+  echo "${config_json}" | jq '.' > "${cfg}"
+  chmod 600 "${cfg}"
+  log "Wrote Firebase web config → ${cfg}"
+}
+
+# Build frontend with target-project VITE_FIREBASE_* (shell env wins over
+# committed frontend/.env.production). Fails if dist still embeds the wrong
+# projectId — the exact gap that made dev-03 login against sport-slot-dev.
+build_frontend_for_project() {
+  local cfg="${FIREBASE_WEB_CONFIG_FILE}"
+  local api_key auth_domain project_id storage_bucket messaging_sender_id app_id
+  local dist_js
+
+  [[ -f "${cfg}" ]] || { log "Missing Firebase web config ${cfg}"; return 1; }
+
+  api_key="$(jq -r '.apiKey' "${cfg}")"
+  auth_domain="$(jq -r '.authDomain' "${cfg}")"
+  project_id="$(jq -r '.projectId' "${cfg}")"
+  storage_bucket="$(jq -r '.storageBucket' "${cfg}")"
+  messaging_sender_id="$(jq -r '.messagingSenderId' "${cfg}")"
+  app_id="$(jq -r '.appId' "${cfg}")"
+
+  [[ "${project_id}" == "${PROJECT_ID}" ]] \
+    || { log "Config projectId '${project_id}' != target '${PROJECT_ID}'"; return 1; }
+
+  log "Building frontend with VITE_FIREBASE_PROJECT_ID=${project_id}..."
+  (
+    cd "${REPO_ROOT}/frontend"
+    pnpm install --frozen-lockfile
+    VITE_FIREBASE_API_KEY="${api_key}" \
+    VITE_FIREBASE_AUTH_DOMAIN="${auth_domain}" \
+    VITE_FIREBASE_PROJECT_ID="${project_id}" \
+    VITE_FIREBASE_STORAGE_BUCKET="${storage_bucket}" \
+    VITE_FIREBASE_MESSAGING_SENDER_ID="${messaging_sender_id}" \
+    VITE_FIREBASE_APP_ID="${app_id}" \
+    pnpm build
+  ) || return 1
+
+  dist_js="$(ls "${REPO_ROOT}/frontend/dist/assets"/index-*.js 2>/dev/null | head -n1 || true)"
+  [[ -n "${dist_js}" ]] || { log "No frontend/dist/assets/index-*.js after build"; return 1; }
+
+  if ! grep -q "projectId:\"${PROJECT_ID}\"" "${dist_js}"; then
+    log "FATAL: built frontend does not embed projectId:\"${PROJECT_ID}\" (file: ${dist_js})"
+    return 1
+  fi
+  if [[ "${PROJECT_ID}" != "sport-slot-dev" ]] && grep -q 'projectId:"sport-slot-dev"' "${dist_js}"; then
+    log "FATAL: built frontend still embeds sport-slot-dev Firebase config"
+    return 1
+  fi
+  log "Frontend build verified: embeds projectId:\"${PROJECT_ID}\""
+}
+
+sync_frontend_to_gcs() {
+  local bucket="gs://${PROJECT_ID}-frontend"
+  local dist="${REPO_ROOT}/frontend/dist"
+
+  log "Syncing frontend/dist to ${bucket}..."
+  gcloud storage cp \
+    "${dist}/index.html" "${dist}/manifest.webmanifest" "${dist}/sw.js" "${dist}/registerSW.js" \
+    "${bucket}/" --cache-control="no-cache" \
+    || return 1
+  gcloud storage cp "${dist}"/workbox-*.js "${bucket}/" --cache-control="no-cache" \
+    || return 1
+  gcloud storage cp --cache-control="public, max-age=31536000, immutable" \
+    "${dist}"/assets/* "${bucket}/assets/" \
+    || return 1
+  gcloud storage cp \
+    "${dist}/favicon-32x32.png" "${dist}/pwa-192x192.png" "${dist}/pwa-512x512.png" "${dist}/pwa-maskable-512x512.png" \
+    "${bucket}/" --cache-control="public, max-age=86400" \
+    || return 1
+}
+
+# Idempotently register this environment in scripts/tf.sh so subsequent
+# terraform work does not require a manual edit for a freshly built env.
+ensure_tf_sh_registry_entry() {
+  local tfsh="${REPO_ROOT}/scripts/tf.sh"
+  local reg="${REGISTRY_ENV_NAME}"
+  local tmp
+
+  [[ -f "${tfsh}" ]] || { log "scripts/tf.sh missing — skip registry update"; return 0; }
+  [[ -n "${reg}" ]] || { log "REGISTRY_ENV_NAME empty — skip registry update"; return 0; }
+
+  if grep -qE "^[[:space:]]*${reg}\\)" "${tfsh}"; then
+    log "scripts/tf.sh already registers '${reg}' — leave as-is."
+    return 0
+  fi
+
+  log "Adding scripts/tf.sh registry entry for '${reg}' → ${PROJECT_ID}"
+  tmp="$(mktemp)"
+  awk -v reg="${reg}" -v project="${PROJECT_ID}" -v bucket="${STATE_BUCKET}" -v varfile="${TFVARS_NAME}" '
+    BEGIN { added_names=0; added_case=0 }
+    /^ENV_NAMES=/ && !added_names {
+      # Append the new env name inside the quoted list.
+      sub(/"$/, " " reg "\"")
+      added_names=1
+    }
+    /^\s*\*\)/ && !added_case {
+      print "    " reg ")"
+      print "      ENV_PROJECT_ID=\"" project "\""
+      print "      ENV_BUCKET=\"" bucket "\""
+      print "      ENV_PREFIX=\"terraform/state\""
+      print "      ENV_VARFILE=\"" varfile "\""
+      print "      ;;"
+      added_case=1
+    }
+    { print }
+    END {
+      if (!added_names || !added_case) {
+        print "ERROR: could not locate ENV_NAMES and/or *) arm in scripts/tf.sh" > "/dev/stderr"
+        exit 1
+      }
+    }
+  ' "${tfsh}" > "${tmp}" || return 1
+  mv "${tmp}" "${tfsh}"
+  chmod 755 "${tfsh}"
+  log "Registered '${reg}' in scripts/tf.sh (commit this change with the env PR)."
+}
+
 # ─── Usage ────────────────────────────────────────────────────────────
 usage() {
   cat <<'EOF'
-drill-bootstrap.sh — single-command SlotSense environment build (PR-G)
+drill-bootstrap.sh — single-command SlotSense environment build (PR-G / PR-L)
+
+Builds a complete environment (project → Terraform → Firebase Auth web app →
+frontend wired to THAT project's Firebase → admin seed → verify) for any of
+dev | test | prod-india | prod-uae. Idempotent and --start-phase resumable.
 
 Usage:
   scripts/drill-bootstrap.sh [options]
@@ -165,7 +433,8 @@ Options:
   --zone ZONE                Zonal default for the provider block (default: asia-south1-c)
   --environment ENV          dev | test | prod-india | prod-uae
   --base-domain DOMAIN       (default: slotsense.chandraailabs.com)
-  --admin-host HOST          (default: admin.slotsense.chandraailabs.com)
+  --admin-host HOST          default is per-env under base-domain:
+                              dev→admin-dev.*  test→admin-test.*  prod→admin.*
   --artifact-repo-name NAME  (default: slot-sense-repo)
   --org-id ID                GCP organization id (looked up + confirmed if omitted)
   --billing-account ID       GCP billing account id (looked up + confirmed if omitted)
@@ -182,10 +451,24 @@ Options:
 project_id naming rule (must match terraform/variables.tf):
   sport-slot-dev (legacy) OR slot-sense-{dev|test|prod-XX}[-NN]
 
+What this script NOW wires automatically (no manual console steps):
+  - Firebase project + Email/Password (Terraform auth.tf)
+  - Firebase WEB app + public SDK config
+  - Frontend build with VITE_FIREBASE_* for the target project (verified in dist)
+  - Hosting deploy + GCS frontend bucket sync
+  - Platform admin seed against --project
+  - scripts/tf.sh registry entry for the new env
+
+Still manual after the run (external / human-gated):
+  - Namecheap DNS A + cert CNAME (see manifest)
+  - Password-manager capture of the temp admin password
+  - Per-env GitHub Actions deploy.yml wiring (optional until CI targets this env)
+  - Commit of the scripts/tf.sh registry edit
+
 Examples:
-  scripts/drill-bootstrap.sh --project-id slot-sense-test-01 --environment test
-  scripts/drill-bootstrap.sh --project-id slot-sense-dev-02 --environment dev --dry-run
-  scripts/drill-bootstrap.sh --project-id slot-sense-test-01 --start-phase 6 --yes
+  scripts/drill-bootstrap.sh --project-id slot-sense-test-01 --environment test --yes
+  scripts/drill-bootstrap.sh --project-id slot-sense-dev-03 --environment dev --dry-run
+  scripts/drill-bootstrap.sh --project-id slot-sense-dev-03 --start-phase 7 --yes
 
 Resend API key: interactive mode prompts (input hidden); --non-interactive
 mode requires SLOTSENSE_RESEND_API_KEY to be exported in the environment.
@@ -236,7 +519,7 @@ while [[ $# -gt 0 ]]; do
     --zone) ZONE="$2"; shift 2 ;;
     --environment) ENVIRONMENT="$2"; shift 2 ;;
     --base-domain) BASE_DOMAIN="$2"; shift 2 ;;
-    --admin-host) ADMIN_HOST="$2"; shift 2 ;;
+    --admin-host) ADMIN_HOST="$2"; ADMIN_HOST_EXPLICIT=1; shift 2 ;;
     --artifact-repo-name) ARTIFACT_REPO_NAME="$2"; shift 2 ;;
     --org-id) ORG_ID="$2"; shift 2 ;;
     --billing-account) BILLING_ACCOUNT="$2"; shift 2 ;;
@@ -276,6 +559,7 @@ phase0() {
   OUTPUT_FILE="${REPO_ROOT}/bootstrap-output-${PROJECT_ID}-$(date -u '+%Y%m%dT%H%M%SZ').md"
   CMDLOG_FILE="${REPO_ROOT}/.drill-bootstrap-${PROJECT_ID}.cmdlog"
   TIMING_FILE="${REPO_ROOT}/.drill-bootstrap-${PROJECT_ID}.timing"
+  FIREBASE_WEB_CONFIG_FILE="${REPO_ROOT}/.drill-firebase-web-config-${PROJECT_ID}.json"
   state_load
 
   # Flags override cached state; cached state fills in anything left blank
@@ -291,8 +575,10 @@ phase0() {
   if [[ "${BASE_DOMAIN}" == "${DEFAULT_BASE_DOMAIN}" && -n "${CACHED_BASE_DOMAIN:-}" ]]; then
     BASE_DOMAIN="${CACHED_BASE_DOMAIN}"
   fi
-  if [[ "${ADMIN_HOST}" == "${DEFAULT_ADMIN_HOST}" && -n "${CACHED_ADMIN_HOST:-}" ]]; then
-    ADMIN_HOST="${CACHED_ADMIN_HOST}"
+  if [[ "${ADMIN_HOST_EXPLICIT}" -eq 0 ]]; then
+    if [[ -n "${CACHED_ADMIN_HOST:-}" ]]; then
+      ADMIN_HOST="${CACHED_ADMIN_HOST}"
+    fi
   fi
   if [[ "${ARTIFACT_REPO_NAME}" == "${DEFAULT_ARTIFACT_REPO}" && -n "${CACHED_ARTIFACT_REPO_NAME:-}" ]]; then
     ARTIFACT_REPO_NAME="${CACHED_ARTIFACT_REPO_NAME}"
@@ -304,6 +590,8 @@ phase0() {
   TFVARS_NAME="${CACHED_TFVARS_NAME:-${PROJECT_ID}.tfvars}"
   TFVARS_PATH="${TF_DIR}/${TFVARS_NAME}"
   IMAGE_TAG="${CACHED_IMAGE_TAG:-}"
+  PUBLIC_HOST_LABEL="${CACHED_PUBLIC_HOST_LABEL:-}"
+  REGISTRY_ENV_NAME="${CACHED_REGISTRY_ENV_NAME:-}"
 
   validate_region "${REGION}" || fail 0 "invalid region."
 
@@ -314,6 +602,13 @@ phase0() {
     read -r -p "environment (dev|test|prod-india|prod-uae): " ENVIRONMENT
   fi
   validate_environment "${ENVIRONMENT}" || fail 0 "invalid environment."
+
+  # Derive per-env hosts (Pattern B) when the operator did not pin them.
+  PUBLIC_HOST_LABEL="${PUBLIC_HOST_LABEL:-$(derive_public_host_label "${ENVIRONMENT}")}"
+  REGISTRY_ENV_NAME="${REGISTRY_ENV_NAME:-$(derive_registry_env_name "${PROJECT_ID}")}"
+  if [[ "${ADMIN_HOST_EXPLICIT}" -eq 0 && -z "${CACHED_ADMIN_HOST:-}" ]]; then
+    ADMIN_HOST="$(derive_admin_host "${ENVIRONMENT}" "${BASE_DOMAIN}")"
+  fi
 
   if [[ -z "${ORG_ID}" ]]; then
     if [[ "${DRY_RUN}" -eq 1 ]]; then
@@ -364,7 +659,9 @@ phase0() {
   printf '  %-20s %s\n' "zone:" "${ZONE}"
   printf '  %-20s %s\n' "environment:" "${ENVIRONMENT}"
   printf '  %-20s %s\n' "base_domain:" "${BASE_DOMAIN}"
+  printf '  %-20s %s\n' "public_host:" "${PUBLIC_HOST_LABEL}.${BASE_DOMAIN}"
   printf '  %-20s %s\n' "admin_host:" "${ADMIN_HOST}"
+  printf '  %-20s %s\n' "tf.sh registry:" "${REGISTRY_ENV_NAME}"
   printf '  %-20s %s\n' "artifact_repo_name:" "${ARTIFACT_REPO_NAME}"
   printf '  %-20s %s\n' "org_id:" "${ORG_ID}"
   printf '  %-20s %s\n' "billing_account_id:" "${BILLING_ACCOUNT}"
@@ -388,6 +685,8 @@ phase0() {
   state_set CACHED_ENVIRONMENT "${ENVIRONMENT}"
   state_set CACHED_BASE_DOMAIN "${BASE_DOMAIN}"
   state_set CACHED_ADMIN_HOST "${ADMIN_HOST}"
+  state_set CACHED_PUBLIC_HOST_LABEL "${PUBLIC_HOST_LABEL}"
+  state_set CACHED_REGISTRY_ENV_NAME "${REGISTRY_ENV_NAME}"
   state_set CACHED_ARTIFACT_REPO_NAME "${ARTIFACT_REPO_NAME}"
   state_set CACHED_ORG_ID "${ORG_ID}"
   state_set CACHED_BILLING_ACCOUNT "${BILLING_ACCOUNT}"
@@ -492,6 +791,8 @@ phase2() {
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     log "[dry-run] would run: firebase projects:addfirebase ${PROJECT_ID}"
+    log "[dry-run] would ensure a Firebase WEB app exists and cache its SDK config to"
+    log "[dry-run]   ${FIREBASE_WEB_CONFIG_FILE}"
     t1=$(date +%s); record_elapsed 2 "Firebase" "$((t1 - t0))"
     return 0
   fi
@@ -508,6 +809,13 @@ phase2() {
     fail 2 "Firebase resources not detected on project after addfirebase. Check ${CMDLOG_FILE}."
   fi
   log "Verified: Firebase resources present on ${PROJECT_ID}."
+
+  # WEB app + public SDK config — required so Phase 7 can build the SPA
+  # against THIS project rather than the committed frontend/.env.production
+  # (which is still sport-slot-dev). Gap found live on dev-03: 0 web apps,
+  # SPA baked projectId:"sport-slot-dev", seed password unused.
+  ensure_firebase_web_app_config \
+    || fail 2 "could not ensure Firebase web app + SDK config for ${PROJECT_ID}."
 
   log "NOTE: Email/Password sign-in provider is Terraform-managed (google_identity_platform_config.auth, PR-F)."
   log "      No manual console step is needed — it is created by the Phase 6 main apply."
@@ -692,9 +1000,15 @@ phase6() {
   log "        live sport-slot-dev URL; only the CI/deploy_cloud_run.sh path corrects it"
   log "        (self-lookup requires the service to already exist)."
   DEPLOY_START_TS="$(timestamp)"
+  local app_env="development"
+  case "${ENVIRONMENT}" in
+    prod-india|prod-uae) app_env="production" ;;
+    test) app_env="test" ;;
+    *) app_env="development" ;;
+  esac
   local deploy_env=(SLOTSENSE_PROJECT="${PROJECT_ID}" SLOTSENSE_REGION="${REGION}"
     SLOTSENSE_ARTIFACT_REPO="${ARTIFACT_REPO_NAME}" SLOTSENSE_BASE_DOMAIN="${BASE_DOMAIN}"
-    SLOTSENSE_ADMIN_HOST="${ADMIN_HOST}")
+    SLOTSENSE_ADMIN_HOST="${ADMIN_HOST}" SLOTSENSE_APP_ENVIRONMENT="${app_env}")
   [[ "${AUTO_YES}" -eq 1 ]] && deploy_env+=(CI=true)
   env "${deploy_env[@]}" "${REPO_ROOT}/scripts/deploy_cloud_run.sh" "${IMAGE_TAG}" \
     || fail 6 "corrective deploy_cloud_run.sh failed."
@@ -709,7 +1023,11 @@ phase7() {
   banner "PHASE 7 — Application enablement"
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    log "[dry-run] would deploy firestore rules+indexes, build+deploy frontend, seed platform admin."
+    log "[dry-run] would deploy firestore rules+indexes."
+    log "[dry-run] would ensure Firebase web SDK config, build frontend with VITE_FIREBASE_* for ${PROJECT_ID},"
+    log "[dry-run]   verify dist embeds projectId:\"${PROJECT_ID}\", deploy Hosting + GCS sync."
+    log "[dry-run] would seed platform admin against --project ${PROJECT_ID}."
+    log "[dry-run] would ensure scripts/tf.sh registry entry for '${REGISTRY_ENV_NAME}'."
     t1=$(date +%s); record_elapsed 7 "Application enablement" "$((t1 - t0))"
     return 0
   fi
@@ -718,33 +1036,21 @@ phase7() {
   firebase deploy --only firestore:rules,firestore:indexes --project "${PROJECT_ID}" \
     || fail 7 "firestore rules/indexes deploy failed."
 
-  log "7b) Building + deploying frontend..."
-  (cd "${REPO_ROOT}/frontend" && pnpm install --frozen-lockfile && pnpm build) \
-    || fail 7 "frontend build failed."
+  log "7b) Ensuring Firebase web config + building frontend for ${PROJECT_ID}..."
+  # Re-ensure on resume-from-7 (Phase 2 may have been skipped).
+  ensure_firebase_web_app_config \
+    || fail 7 "could not ensure Firebase web app + SDK config for ${PROJECT_ID}."
+  build_frontend_for_project \
+    || fail 7 "frontend build/verify failed — SPA would not authenticate against ${PROJECT_ID}."
 
   log "    Deploying Firebase Hosting (scripts/deploy_hosting_rest.sh, project-parameterized)..."
   FIREBASE_PROJECT="${PROJECT_ID}" "${REPO_ROOT}/scripts/deploy_hosting_rest.sh" \
     || fail 7 "Firebase Hosting deploy failed."
 
-  log "    Syncing frontend/dist to gs://${PROJECT_ID}-frontend (same grouping as .github/workflows/deploy.yml)..."
-  local bucket="gs://${PROJECT_ID}-frontend"
-  local dist="${REPO_ROOT}/frontend/dist"
+  sync_frontend_to_gcs \
+    || fail 7 "GCS frontend sync failed."
 
-  gcloud storage cp \
-    "${dist}/index.html" "${dist}/manifest.webmanifest" "${dist}/sw.js" "${dist}/registerSW.js" \
-    "${bucket}/" --cache-control="no-cache" \
-    || fail 7 "GCS sync (no-cache group) failed."
-  gcloud storage cp "${dist}"/workbox-*.js "${bucket}/" --cache-control="no-cache" \
-    || fail 7 "GCS sync (workbox) failed."
-  gcloud storage cp --cache-control="public, max-age=31536000, immutable" \
-    "${dist}"/assets/* "${bucket}/assets/" \
-    || fail 7 "GCS sync (assets) failed."
-  gcloud storage cp \
-    "${dist}/favicon-32x32.png" "${dist}/pwa-192x192.png" "${dist}/pwa-512x512.png" "${dist}/pwa-maskable-512x512.png" \
-    "${bucket}/" --cache-control="public, max-age=86400" \
-    || fail 7 "GCS sync (icons) failed."
-
-  log "7c) Seeding platform admin..."
+  log "7c) Seeding platform admin against project ${PROJECT_ID}..."
   # Captured to an ephemeral, 600-permission file only — NEVER to
   # CMDLOG_FILE (persistent, part of the report). seed_platform_admin.py
   # prints the temp password verbatim to stdout; piping that through
@@ -762,12 +1068,19 @@ phase7() {
   fi
   log "seed_platform_admin.py succeeded (output captured to ephemeral file, not persistent log)."
 
-  ADMIN_EMAIL_CAPTURED="$(grep -oE 'admin: [^ ]+@[^ ]+' "${seed_log}" | head -n1 | awk '{print $2}')"
+  # Prefer the explicit "platform admin: email" / "Created ... admin: email" lines.
+  ADMIN_EMAIL_CAPTURED="$(
+    grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "${seed_log}" | head -n1 || true
+  )"
   ADMIN_EMAIL_CAPTURED="${ADMIN_EMAIL_CAPTURED:-admin@chandraailabs.com}"
   ADMIN_TEMP_PASSWORD="$(grep 'Temp password:' "${seed_log}" | head -n1 | sed 's/.*Temp password: //')"
   [[ -n "${ADMIN_TEMP_PASSWORD}" ]] || fail 7 "could not capture temp password from seed_platform_admin.py output — check ${seed_log} manually, then rotate it once retrieved."
   rm -f "${seed_log}"
   state_set CACHED_ADMIN_EMAIL "${ADMIN_EMAIL_CAPTURED}"
+
+  log "7d) Ensuring scripts/tf.sh registry entry..."
+  ensure_tf_sh_registry_entry \
+    || fail 7 "could not update scripts/tf.sh registry for '${REGISTRY_ENV_NAME}'."
 
   t1=$(date +%s); record_elapsed 7 "Application enablement" "$((t1 - t0))"
 }
@@ -786,7 +1099,8 @@ phase8() {
   banner "PHASE 8 — Verification"
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    log "[dry-run] would verify: latest revision Ready+100% traffic, zero WARNING+ logs since deploy, terraform plan = No changes."
+    log "[dry-run] would verify: latest revision Ready+100% traffic, frontend GCS embeds projectId,"
+    log "[dry-run]   LB /health via Host header, zero WARNING+ logs since deploy, terraform plan = No changes."
     t1=$(date +%s); record_elapsed 8 "Verification" "$((t1 - t0))"
     return 0
   fi
@@ -805,6 +1119,64 @@ phase8() {
     log "FAIL: newest revision Ready='${ready}' traffic='${traffic_pct}'"
     OVERALL_VERIFY_OK=0
   fi
+
+  # Frontend ↔ Auth project wiring (the gap that broke admin login on
+  # slot-sense-dev-03). Ground truth = what is actually in the frontend
+  # bucket, not what a local dist folder claims.
+  log "Checking hosted frontend embeds Firebase projectId=${PROJECT_ID}..."
+  local asset_uri asset_tmp hosted_ok=0
+  asset_uri="$(gcloud storage ls "gs://${PROJECT_ID}-frontend/assets/index-*.js" 2>/dev/null | head -n1 || true)"
+  asset_tmp="$(mktemp)"
+  if [[ -n "${asset_uri}" ]] && gcloud storage cat "${asset_uri}" > "${asset_tmp}" 2>/dev/null; then
+    if grep -q "projectId:\"${PROJECT_ID}\"" "${asset_tmp}"; then
+      if [[ "${PROJECT_ID}" != "sport-slot-dev" ]] && grep -q 'projectId:"sport-slot-dev"' "${asset_tmp}"; then
+        VERIFY_RESULTS+=("FAIL: hosted frontend still embeds sport-slot-dev Firebase config")
+        log "FAIL: hosted frontend still embeds sport-slot-dev Firebase config (${asset_uri})"
+        OVERALL_VERIFY_OK=0
+      else
+        VERIFY_RESULTS+=("PASS: hosted frontend embeds projectId:\"${PROJECT_ID}\"")
+        log "PASS: hosted frontend embeds projectId:\"${PROJECT_ID}\""
+        hosted_ok=1
+      fi
+    else
+      VERIFY_RESULTS+=("FAIL: hosted frontend does not embed projectId:\"${PROJECT_ID}\"")
+      log "FAIL: hosted frontend does not embed projectId:\"${PROJECT_ID}\" (${asset_uri})"
+      OVERALL_VERIFY_OK=0
+    fi
+  else
+    VERIFY_RESULTS+=("FAIL: could not read hosted frontend asset under gs://${PROJECT_ID}-frontend/assets/")
+    log "FAIL: could not read hosted frontend asset under gs://${PROJECT_ID}-frontend/assets/"
+    OVERALL_VERIFY_OK=0
+  fi
+  rm -f "${asset_tmp}"
+
+  # LB path (Cloud Run is ingress=internal-and-cloud-load-balancing, so
+  # the *.run.app URL is expected to 404 from the public internet).
+  log "Checking LB /health via static IP + Host header..."
+  local lb_ip health_code
+  lb_ip="$(gcloud compute addresses describe slotsense-lb-ip --global --project="${PROJECT_ID}" \
+    --format='value(address)' 2>/dev/null || true)"
+  if [[ -n "${lb_ip}" ]]; then
+    health_code="$(
+      curl -sS -o /dev/null -w '%{http_code}' -m 15 -k \
+        --resolve "${PUBLIC_HOST_LABEL}.${BASE_DOMAIN}:443:${lb_ip}" \
+        "https://${PUBLIC_HOST_LABEL}.${BASE_DOMAIN}/health" 2>/dev/null || echo "000"
+    )"
+    if [[ "${health_code}" == "200" ]]; then
+      VERIFY_RESULTS+=("PASS: LB /health → 200 via Host ${PUBLIC_HOST_LABEL}.${BASE_DOMAIN}")
+      log "PASS: LB /health → 200 via Host ${PUBLIC_HOST_LABEL}.${BASE_DOMAIN} (ip ${lb_ip})"
+    else
+      # Cert may still be provisioning on first build — WARN not FAIL so
+      # Phase 9 still writes the DNS records the operator needs.
+      VERIFY_RESULTS+=("WARN: LB /health → HTTP ${health_code} (cert/DNS may still be pending — see manifest)")
+      log "WARN: LB /health → HTTP ${health_code} via ${PUBLIC_HOST_LABEL}.${BASE_DOMAIN} (ip ${lb_ip}) — DNS/cert may still be pending"
+    fi
+  else
+    VERIFY_RESULTS+=("WARN: could not resolve LB static IP for health check")
+    log "WARN: could not resolve LB static IP for health check"
+  fi
+  # silence unused when shellcheck is strict about hosted_ok
+  : "${hosted_ok}"
 
   # Log check — capture exit status separately so a failed gcloud call
   # doesn't kill the script under pipefail (auth expiry mid-run, logging
@@ -896,6 +1268,12 @@ phase9() {
     done < "${TIMING_FILE}"
   fi
 
+  local public_host="${PUBLIC_HOST_LABEL}.${BASE_DOMAIN}"
+  local firebase_app_id="(not cached)"
+  if [[ -f "${FIREBASE_WEB_CONFIG_FILE}" ]]; then
+    firebase_app_id="$(jq -r '.appId // "(missing)"' "${FIREBASE_WEB_CONFIG_FILE}" 2>/dev/null || echo "(missing)")"
+  fi
+
   {
     echo "# SlotSense drill-bootstrap output — ${PROJECT_ID}"
     echo ""
@@ -916,50 +1294,65 @@ phase9() {
     echo "| zone | ${ZONE} (decorative for Redis — location_id is hardcoded in base_infra.tf) |"
     echo "| environment | ${ENVIRONMENT} |"
     echo "| base_domain | ${BASE_DOMAIN} |"
+    echo "| public_host (Pattern B) | ${public_host} |"
     echo "| admin_host | ${ADMIN_HOST} |"
+    echo "| tf.sh registry key | ${REGISTRY_ENV_NAME} |"
     echo "| artifact_repo_name | ${ARTIFACT_REPO_NAME} |"
     echo "| org_id | ${ORG_ID} |"
     echo "| billing_account_id | ${BILLING_ACCOUNT} |"
     echo "| image_tag | ${IMAGE_TAG} |"
+    echo "| firebase_web_app_id | ${firebase_app_id} |"
     echo ""
-    echo "## Load balancer"
+    echo "## Login (after DNS)"
+    echo ""
+    echo "- App URL: \`https://${public_host}\`"
+    echo "- Admin host (SPA): \`https://${ADMIN_HOST}\` (A record must also point at the LB IP below)"
+    echo "- Firebase Auth project: **${PROJECT_ID}** (frontend is built against this — not sport-slot-dev)"
+    echo "- Platform admin email: \`${ADMIN_EMAIL_CAPTURED:-admin@chandraailabs.com}\`"
+    echo "- Temp password: \`${ADMIN_TEMP_PASSWORD:-<not captured — re-run seed_platform_admin.py --project ${PROJECT_ID}>}\`"
+    echo "- Sign in **fresh** (sign-out first if any old session); custom claims only appear on a new ID token."
+    echo ""
+    echo "## Load balancer + DNS (manual — external registrar)"
     echo ""
     echo "- LB static IP: **${lb_ip}**"
-    echo "- DNS records to create at Namecheap:"
-    echo "  - Wildcard A record: \`*.${BASE_DOMAIN}\` -> ${lb_ip}"
-    echo "  - Certificate Manager DNS authorization CNAME: \`${cname_name}\` -> \`${cname_data}\` (must remain permanently — required for cert renewal)"
+    echo "- DNS records to create at Namecheap (Pattern B — one wildcard cert covers these):"
+    echo "  - A: \`${public_host}\` → \`${lb_ip}\`"
+    echo "  - A: \`${ADMIN_HOST}\` → \`${lb_ip}\` (if not already covered by a wildcard A you manage)"
+    echo "  - CNAME (permanent, cert renewal): \`${cname_name}\` → \`${cname_data}\`"
+    echo "- After DNS: \`curl -sf https://${public_host}/health\` → \`{\"status\":\"ok\"}\`"
     echo ""
     echo "## Cloud Run"
     echo ""
-    echo "- Service URL: ${run_url}"
+    echo "- Service URL (internal/LB only — public *.run.app /health is expected to 404): ${run_url}"
+    echo "- \`SPORTSLOT_GCP_PROJECT\` must be \`${PROJECT_ID}\` (set by Terraform + deploy_cloud_run.sh)."
     echo ""
-    echo "## Platform admin"
+    echo "## scripts/tf.sh registry"
     echo ""
-    echo "- Email: ${ADMIN_EMAIL_CAPTURED:-admin@chandraailabs.com}"
-    echo "- Temp password: ${ADMIN_TEMP_PASSWORD:-<not captured — check command log>}"
-    echo "- Move this to a password manager immediately, then delete this file."
-    echo ""
-    echo "## scripts/tf.sh registry entry (add manually to scripts/tf.sh's env_lookup())"
+    echo "The bootstrap script **auto-registers** \`${REGISTRY_ENV_NAME}\` in \`scripts/tf.sh\` when missing."
+    echo "Commit that file change with the environment PR:"
     echo ""
     echo '```'
-    echo "    ${ENVIRONMENT})"
-    echo "      ENV_PROJECT_ID=\"${PROJECT_ID}\""
-    echo "      ENV_BUCKET=\"${STATE_BUCKET}\""
-    echo "      ENV_PREFIX=\"terraform/state\""
-    echo "      ENV_VARFILE=\"${TFVARS_NAME}\""
-    echo "      ;;"
+    echo "scripts/tf.sh ${REGISTRY_ENV_NAME} plan"
     echo '```'
-    echo ""
-    echo "Also add \"${ENVIRONMENT}\" to ENV_NAMES in the same file."
     echo ""
     echo "## Remaining manual steps"
     echo ""
-    echo "- DNS: create the two records above at Namecheap; wait for propagation."
-    echo "- Certificate issuance: wait for the wildcard cert to go ACTIVE after DNS authorization resolves."
-    echo "- SMS alert channel (optional): create 'Coordinator SMS' in Console, verify phone,"
-    echo "  then set enable_sms_alerts = true in ${TFVARS_NAME} and re-apply."
-    echo "- Per-env CI wiring: this environment is not yet wired into .github/workflows/deploy.yml."
-    echo "- Add the scripts/tf.sh registry entry above."
+    echo "1. Copy admin email + temp password into the password manager; **delete this file**."
+    echo "2. Create the DNS records above; wait for cert ACTIVE if first env on this domain."
+    echo "3. Commit \`scripts/tf.sh\` registry edit (if the run added one)."
+    echo "4. (Optional) Wire \`.github/workflows/deploy.yml\` to this project for CI deploys."
+    echo "5. (Optional) SMS alert channel: Console → create 'Coordinator SMS', then"
+    echo "   \`enable_sms_alerts = true\` in ${TFVARS_NAME} and re-apply."
+    echo ""
+    echo "## Verification results"
+    echo ""
+    if [[ ${#VERIFY_RESULTS[@]} -gt 0 ]]; then
+      for r in "${VERIFY_RESULTS[@]}"; do
+        echo "- ${r}"
+      done
+    else
+      echo "- (no Phase 8 results — Phase 8 may have been skipped via --start-phase)"
+    fi
     echo ""
     echo "## Per-phase elapsed times (measured RTO)"
     echo ""
