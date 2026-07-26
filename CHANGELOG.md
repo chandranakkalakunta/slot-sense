@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### chore(infra): register dev-03 in tf.sh, prune dev-01, true-up DRILL-PASS-2 backlog
+
+Registered `slot-sense-dev-03` in `scripts/tf.sh` and pruned the deleted
+`dev-01` environment; trued-up `docs/backlog.md`'s `DRILL-PASS-2` entry
+to the 2026-07-25 descope (no data/auth migration; DNS/cert cutover
+remains).
+
+- **`scripts/tf.sh`**: `ENV_NAMES` and `env_lookup()`'s `dev-01` case arm
+  replaced with `dev-03` (`slot-sense-dev-03` project/bucket/varfile).
+  `dev-01`'s project is deleted (30-day `DELETE_REQUESTED` window) and
+  its local `.tfvars` is being removed, so the arm is fully pruned, not
+  just relabeled. The `dev`/`sport-slot-dev` arm is retained — retirement
+  is a separate, Coordinator-paced item (`SPORT-SLOT-DEV-RETIRE`).
+- **`docs/backlog.md`**: `DRILL-PASS-2` flipped from `OPEN` to
+  `IN PROGRESS`, reflecting the dev-03 drill's actual result (~21 min
+  rebuild, well inside the 4h RTO) and the 2026-07-25 Coordinator
+  decision to descope Firestore/Auth export-import (no migration needed
+  — dev-03 is populated fresh). New entries: `DNS-PATTERN-B` (locked —
+  `rvrg-dev`/`rvrg-test`/`rvrg` labels under one wildcard cert),
+  `SPORT-SLOT-DEV-RETIRE` (open, Coordinator pace), and
+  `TF-SH-REGISTRY-DEV-03` (done, this PR).
+
 ### fix(ci): pass SLOTSENSE_* env vars in deploy.yml build-push step (PR-K)
 
 PR-I removed `scripts/build_push.sh`'s silent
