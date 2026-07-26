@@ -10,7 +10,7 @@ traceability record.
 **Entry convention:** `[ID] status — one-line what & why. Blocker. Ref.`
 Status ∈ `OPEN` · `BLOCKED` · `IN PROGRESS` · `✓ DONE — Phase X / PR #n`.
 
-_Last updated: 2026-07-25_
+_Last updated: 2026-07-26_
 
 **Phase 17 (Production Readiness) is build-complete** — all ten
 2026-07-13 baseline audit findings resolved (PR-1a → PR-5c). The
@@ -434,6 +434,26 @@ remaining item for formal phase close. See
   by `var.environment`; prod values are placeholders pending Coordinator
   confirmation (see the `TODO(prod)` comment in `cost.tf`). Resource
   address unchanged (no destroy/recreate). Ref: `terraform/cost.tf`.
+- **CI-DEPLOY-BROKEN · RESOLVED by PR-K (2026-07-25)** — PR-I's
+  removal of scripts/build_push.sh's SLOTSENSE_PROJECT:-
+  sport-slot-dev default (a legitimate safety fix) broke
+  .github/workflows/deploy.yml's build-push step, which relied
+  on that default. Two workflow runs failed on main (30164897492
+  for PR-I merge, 30167637066 for PR-J merge). PR-K adds the
+  three required env vars (SLOTSENSE_PROJECT, SLOTSENSE_REGION,
+  SLOTSENSE_ARTIFACT_REPO) explicitly to the build-push step,
+  hardcoded to sport-slot-dev pending the larger per-env CI
+  wiring job. Root cause: Strategist proposed the PR-I change
+  without reading deploy.yml first — §4.13 miss, v3.9 §4.14
+  violation. Ref: .github/workflows/deploy.yml build-push step.
+- **CI-DEPLOY-CLOUD-RUN-DEFAULTS-ASYMMETRY · OPEN** — after PR-K,
+  scripts/build_push.sh hard-fails on missing SLOTSENSE_PROJECT
+  (PR-I) but scripts/deploy_cloud_run.sh still uses
+  SLOTSENSE_PROJECT:-sport-slot-dev (default). Same
+  silent-defaulting-to-production hazard PR-I aimed to close,
+  just in a different script. Should be tightened when the
+  larger per-env CI wiring job runs. Ref:
+  scripts/deploy_cloud_run.sh lines 5-6.
 
 ---
 

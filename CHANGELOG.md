@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### fix(ci): pass SLOTSENSE_* env vars in deploy.yml build-push step (PR-K)
+
+PR-I removed `scripts/build_push.sh`'s silent
+`SLOTSENSE_PROJECT:-sport-slot-dev` default — correctly, to
+prevent accidental production deploys. But `.github/workflows/
+deploy.yml`'s `Build + push backend, deploy Cloud Run` step
+did not set that env var explicitly, so every push to main
+after PR-I hit the new hard-fail at build_push.sh line 6.
+
+PR-K adds `SLOTSENSE_PROJECT`, `SLOTSENSE_REGION`, and
+`SLOTSENSE_ARTIFACT_REPO` to the step's env block, hardcoded
+to sport-slot-dev — the value the removed default was
+providing. Full per-env CI parameterization (the ~5 other
+sport-slot-dev hardcodes in deploy.yml — SA emails, bucket
+names, WIF provider) remains tracked as a separate backlog
+item and is not touched here.
+
+Also opens `CI-DEPLOY-CLOUD-RUN-DEFAULTS-ASYMMETRY` — same
+hazard PR-I closed in build_push.sh still lives in
+deploy_cloud_run.sh's `SLOTSENSE_PROJECT:-sport-slot-dev`
+default; deferred to the larger CI parameterization job.
+
 ### fix(tooling)+fix(tf): drill-bootstrap.sh live-drill hardening (PR-J)
 
 The dev-03 (2026-07-25) first live drill surfaced four gaps invisible

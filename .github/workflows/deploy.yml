@@ -78,6 +78,12 @@ jobs:
         env:
           CI: "true"
           BUILD_ID: ${{ github.sha }}
+          # scripts/build_push.sh no longer defaults these (PR-I safety fix).
+          # deploy.yml explicitly passes what CI targets today. Full per-env
+          # parameterization tracked separately in backlog.
+          SLOTSENSE_PROJECT: sport-slot-dev
+          SLOTSENSE_REGION: asia-south1
+          SLOTSENSE_ARTIFACT_REPO: sport-slot-repo
         run: |
           make build-push
           make deploy-dev
