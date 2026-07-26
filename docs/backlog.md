@@ -325,6 +325,17 @@ remaining item for formal phase close. See
   authoritative RTO measurement (still outstanding — see
   `DRILL-PASS-2`). Ref: `docs/runbooks/DRILL-pass1-report.md`,
   `docs/runbooks/disaster-recovery.md` §4.1.
+- **BOOTSTRAP-FIREBASE-WEB-APP-AND-FRONTEND-WIRING · RESOLVED by PR-L
+  (2026-07-26)** — Phase 2 never created a Firebase WEB app; Phase 7
+  built the SPA with committed `frontend/.env.production`
+  (`sport-slot-dev`), so a freshly provisioned env's UI authenticated
+  against the wrong project while backend/Auth/seed were correct on the
+  new project (symptom: seed temp password unused, old dev password
+  "worked"). PR-L: create/reuse WEB app + SDK config (REST), inject
+  `VITE_FIREBASE_*` at build, verify `projectId` in dist + GCS, Pattern B
+  host defaults, auto `tf.sh` registry, multi-env `deploy_cloud_run.sh`
+  env pins. Ref: `scripts/drill-bootstrap.sh`,
+  `docs/runbooks/provision-environment.md`.
 - **DRILL-PASS-2 · IN PROGRESS (2026-07-25/26)** — Timed rebuild of a
   fresh dev environment (`slot-sense-dev-03`) via
   `scripts/drill-bootstrap.sh --yes`: provisioned to a running Cloud Run

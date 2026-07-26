@@ -122,9 +122,15 @@ redis-local-stop: ## Stop local Redis container
 build-push: ## Build and push backend image via Cloud Build (Coordinator-run)
 	@./scripts/build_push.sh
 
+# deploy_cloud_run.sh refuses to guess a project. Makefile provides
+# sport-slot-dev defaults for the legacy `make deploy-dev` path; any other
+# environment must export SLOTSENSE_* explicitly (or use drill-bootstrap).
 .PHONY: deploy-dev
-deploy-dev: ## Deploy backend to Cloud Run DEV (Coordinator-run, GUARDED)
-	@./scripts/deploy_cloud_run.sh
+deploy-dev: ## Deploy backend to Cloud Run (defaults: sport-slot-dev; override SLOTSENSE_*)
+	@SLOTSENSE_PROJECT="$${SLOTSENSE_PROJECT:-sport-slot-dev}" \
+	 SLOTSENSE_REGION="$${SLOTSENSE_REGION:-asia-south1}" \
+	 SLOTSENSE_ARTIFACT_REPO="$${SLOTSENSE_ARTIFACT_REPO:-sport-slot-repo}" \
+	 ./scripts/deploy_cloud_run.sh
 
 # ═══════════════════════════════════════════════════════════════
 # Frontend

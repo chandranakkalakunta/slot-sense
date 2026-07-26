@@ -6,6 +6,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### docs(runbooks): plain-English create-environment step-by-step guide
+
+Added `docs/runbooks/create-environment-step-by-step.md` — full start-to-finish
+procedure (preflight, script, DNS, cert, first login, checklist) so any
+English-speaking operator can stand up a SlotSense env without reading the
+DR ADR. Linked from `provision-environment.md` and `disaster-recovery.md`.
+
+### fix(dr): single-touch multi-env bootstrap — Firebase web app + frontend Auth wiring (PR-L)
+
+dev-03 live drill left the SPA authenticating against `sport-slot-dev`
+even though Auth/Firestore/seed were correctly isolated on
+`slot-sense-dev-03`. Root cause: Phase 7 ran bare `pnpm build`, which
+baked committed `frontend/.env.production` (`projectId: sport-slot-dev`)
+into the new env's frontend bucket, and Phase 2 never created a
+Firebase WEB app (0 web apps on dev-03). Seed password unused
+(`lastLogin=null`); old dev password "worked" because login never hit
+dev-03 Auth.
+
+- **`scripts/drill-bootstrap.sh`**: Phase 2 creates/reuses a Firebase
+  WEB app via Management REST (gcloud ADC) and caches public SDK config
+  to `.drill-firebase-web-config-<project>.json`. Phase 7 builds the
+  frontend with shell `VITE_FIREBASE_*` for the **target** project,
+  fails hard if `dist` does not embed that `projectId`, deploys Hosting
+  + GCS, seeds admin, and auto-registers the env in `scripts/tf.sh`.
+  Phase 8 verifies hosted JS `projectId` and LB `/health` via Host
+  header. Phase 0 derives Pattern B hosts (`rvrg-dev` /
+  `admin-dev.*`, etc.). Phase 9 manifest lists login URL + remaining
+  manual DNS only.
+- **`scripts/deploy_cloud_run.sh`**: no silent `sport-slot-dev` default
+  (require `SLOTSENSE_PROJECT` / `REGION` / `ARTIFACT_REPO`); pins
+  `VERTEX_PROJECT`, invoice bucket, welcome/reset URLs to the deploy
+  target so config.py sport-slot-dev defaults cannot leak.
+- **`Makefile` `deploy-dev`**: supplies legacy sport-slot-dev defaults
+  so CI/local `make deploy-dev` still works.
+- **Docs**: `provision-environment.md` automatic-vs-manual table;
+  `.gitignore` for Firebase web config cache.
+
 ### chore(infra): register dev-03 in tf.sh, prune dev-01, true-up DRILL-PASS-2 backlog
 
 Registered `slot-sense-dev-03` in `scripts/tf.sh` and pruned the deleted

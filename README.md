@@ -123,6 +123,11 @@ setup, and known issues.
 
 ## Key documents
 
+- [`docs/runbooks/create-environment-step-by-step.md`](docs/runbooks/create-environment-step-by-step.md)
+  — **create a full GCP environment** (dev/test/prod): plain-English
+  steps for the automated installer + DNS + first admin login
+- [`docs/runbooks/provision-environment.md`](docs/runbooks/provision-environment.md)
+  — one-page command card for the same procedure
 - [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — canonical project
   scope, reconciled to actual state through Phase 9
 - [`docs/SLOTSENSE_ARTICLE.md`](docs/SLOTSENSE_ARTICLE.md) — the

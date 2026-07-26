@@ -109,6 +109,7 @@ bootstrap-output-*.md
 .drill-bootstrap-state-*.env
 .drill-bootstrap-*.cmdlog
 .drill-bootstrap-*.timing
+.drill-firebase-web-config-*.json
 
 # OS
 Thumbs.db

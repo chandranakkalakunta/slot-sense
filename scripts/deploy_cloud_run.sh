@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
-# Deploy to Cloud Run (DEV). Coordinator-run. Guarded.
+# Deploy Cloud Run for any SlotSense environment. Coordinator-run. Guarded.
+# Requires explicit target project — no silent sport-slot-dev default
+# (same safety posture as scripts/build_push.sh after PR-I).
 set -euo pipefail
 
-PROJECT="${SLOTSENSE_PROJECT:-sport-slot-dev}"
-REGION="${SLOTSENSE_REGION:-asia-south1}"
+: "${SLOTSENSE_PROJECT:?ERROR: SLOTSENSE_PROJECT must be set (no default — refusing to guess).}"
+: "${SLOTSENSE_REGION:?ERROR: SLOTSENSE_REGION must be set.}"
+: "${SLOTSENSE_ARTIFACT_REPO:?ERROR: SLOTSENSE_ARTIFACT_REPO must be set.}"
+
+PROJECT="${SLOTSENSE_PROJECT}"
+REGION="${SLOTSENSE_REGION}"
 SERVICE="sport-slot-api"
 SA="sa-cloud-run@${PROJECT}.iam.gserviceaccount.com"
 TASKS_INVOKER_SA="sa-tasks-invoker@${PROJECT}.iam.gserviceaccount.com"
 SCHEDULER_INVOKER_SA="sa-scheduler-invoker@${PROJECT}.iam.gserviceaccount.com"
 TASKS_QUEUE="notifications"
-ARTIFACT_REPO="${SLOTSENSE_ARTIFACT_REPO:-sport-slot-repo}"
+ARTIFACT_REPO="${SLOTSENSE_ARTIFACT_REPO}"
 IMAGE_BASE="${REGION}-docker.pkg.dev/${PROJECT}/${ARTIFACT_REPO}/${SERVICE}"
 BASE_DOMAIN="${SLOTSENSE_BASE_DOMAIN:-slotsense.chandraailabs.com}"
-ADMIN_HOST="${SLOTSENSE_ADMIN_HOST:-admin.slotsense.chandraailabs.com}"
+ADMIN_HOST="${SLOTSENSE_ADMIN_HOST:-admin.${BASE_DOMAIN}}"
+# Logical env label for app config (not the GCP project id). CI/bootstrap
+# should pass this; default keeps prior behaviour for sport-slot-dev deploys.
+APP_ENVIRONMENT="${SLOTSENSE_APP_ENVIRONMENT:-development}"
+INVOICE_BUCKET="${SLOTSENSE_INVOICE_EXPORT_BUCKET:-${PROJECT}-invoices}"
 
 cd "$(dirname "$0")/.."
 
@@ -54,7 +64,7 @@ if [[ -z "$WORKER_URL" ]]; then
 fi
 
 echo "About to deploy ${IMAGE}"
-echo "  service=${SERVICE} region=${REGION} sa=${SA}"
+echo "  service=${SERVICE} region=${REGION} project=${PROJECT} sa=${SA}"
 echo "  mem=512Mi cpu=1 (ADR-0005)"
 # Skip interactive confirmation in CI (CI=true is set by GitHub Actions).
 if [ -z "${CI:-}" ]; then
@@ -66,6 +76,10 @@ fi
 # and the D7 model — CI sets image + env only. Previously this
 # script forced --max-instances=2, silently reverting Terraform's
 # 10 on every deploy (found in DR drill Pass 1).
+#
+# Multi-env completeness: vertex_project / invoice bucket / welcome URLs
+# previously fell through to config.py defaults of sport-slot-dev — wrong
+# for any other project. Always pin them to the deploy target.
 gcloud run deploy "$SERVICE" \
   --project="$PROJECT" --region="$REGION" \
   --image="$IMAGE" \
@@ -73,7 +87,7 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --ingress=internal-and-cloud-load-balancing \
   --memory=512Mi --cpu=1 \
-  --set-env-vars="SPORTSLOT_ENVIRONMENT=development,SPORTSLOT_GCP_PROJECT=${PROJECT},SPORTSLOT_BASE_DOMAIN=${BASE_DOMAIN},SPORTSLOT_ADMIN_HOST=${ADMIN_HOST},SPORTSLOT_REDIS_HOST=${REDIS_HOST},SPORTSLOT_REDIS_PORT=${REDIS_PORT},SPORTSLOT_TASKS_QUEUE=${TASKS_QUEUE},SPORTSLOT_TASKS_LOCATION=${REGION},SPORTSLOT_WORKER_BASE_URL=${WORKER_URL},SPORTSLOT_TASKS_INVOKER_SA=${TASKS_INVOKER_SA},SPORTSLOT_SCHEDULER_INVOKER_SA=${SCHEDULER_INVOKER_SA},SPORTSLOT_CLOUD_RUN_SA_EMAIL=${SA},BUILD_ID=${BUILD_ID:-unknown}" \
+  --set-env-vars="SPORTSLOT_ENVIRONMENT=${APP_ENVIRONMENT},SPORTSLOT_GCP_PROJECT=${PROJECT},SPORTSLOT_BASE_DOMAIN=${BASE_DOMAIN},SPORTSLOT_ADMIN_HOST=${ADMIN_HOST},SPORTSLOT_REDIS_HOST=${REDIS_HOST},SPORTSLOT_REDIS_PORT=${REDIS_PORT},SPORTSLOT_TASKS_QUEUE=${TASKS_QUEUE},SPORTSLOT_TASKS_LOCATION=${REGION},SPORTSLOT_WORKER_BASE_URL=${WORKER_URL},SPORTSLOT_TASKS_INVOKER_SA=${TASKS_INVOKER_SA},SPORTSLOT_SCHEDULER_INVOKER_SA=${SCHEDULER_INVOKER_SA},SPORTSLOT_CLOUD_RUN_SA_EMAIL=${SA},SPORTSLOT_VERTEX_PROJECT=${PROJECT},SPORTSLOT_INVOICE_EXPORT_BUCKET=${INVOICE_BUCKET},SPORTSLOT_WELCOME_LOGIN_URL=https://${BASE_DOMAIN}/signin,SPORTSLOT_RESET_CONTINUE_URL=https://${BASE_DOMAIN}/reset,BUILD_ID=${BUILD_ID:-unknown}" \
   --network=default --subnet=default \
   --vpc-egress=private-ranges-only \
   --set-secrets="SPORTSLOT_REDIS_AUTH=redis-auth:latest,SPORTSLOT_RESEND_API_KEY=resend-api-key:latest"

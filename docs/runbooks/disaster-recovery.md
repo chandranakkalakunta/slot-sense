@@ -165,7 +165,7 @@ project. See ADR-0038 §Layer 3 for the design rationale.
 
 ### 4.1 Rebuild procedure (new project)
 
-**Primary path:** `scripts/drill-bootstrap.sh` (PR-G) encodes every step
+**Primary path:** `scripts/drill-bootstrap.sh` (PR-G / PR-L) encodes every step
 below into one idempotent, resumable command — run
 `scripts/drill-bootstrap.sh --help` for usage, or `--dry-run` to see the
 plan without touching gcloud/terraform/firebase. It writes a
@@ -175,6 +175,11 @@ the LB IP, DNS records, Cloud Run URL, admin credentials, and the
 documented fallback and the source of truth the script implements — use
 them if the script itself needs debugging, or for any step it doesn't
 cover (DNS, cert wait, per-env CI wiring).
+
+**Operator procedure (plain English, checklist form):**
+[`create-environment-step-by-step.md`](./create-environment-step-by-step.md).
+**One-page command card:**
+[`provision-environment.md`](./provision-environment.md).
 
 Order matters — several steps have a bootstrapping dependency on the
 step before them.
@@ -501,7 +506,12 @@ used to seed the original dev environment — not a new bootstrap path.
 
 - **When to run it:** after the app is serving (Layer 3 rebuild
   complete, backend reachable) and before the first admin login.
-- **Command** (`--project` is required — no ambient/gcloud-context
+  Prefer the automated path: `scripts/drill-bootstrap.sh` Phase 7c
+  seeds the admin after the SPA is built against the **target**
+  project's Firebase WEB app (Phase 2 creates the web app + SDK
+  config; Phase 7 injects `VITE_FIREBASE_*` so login cannot silently
+  hit another environment's Auth — the gap found on dev-03).
+- **Manual command** (`--project` is required — no ambient/gcloud-context
   fallback, to prevent seeding the wrong environment):
 
   ```
@@ -517,6 +527,12 @@ used to seed the original dev environment — not a new bootstrap path.
   has any existing session (e.g. re-running this script against an
   already-seeded environment), they must sign out and sign in again —
   refreshing an existing token is not enough to pick up the claims.
+- **Confirm Auth project in the browser.** The SPA must load Firebase
+  config for `<target-project-id>` (check Network → Identity Toolkit
+  requests, or that hosted `assets/index-*.js` contains
+  `projectId:"<target-project-id>"`). If it still shows `sport-slot-dev`,
+  re-run bootstrap from Phase 7 — do not rotate passwords on the wrong
+  project.
 
 ## 8. DNS (Namecheap)
 
