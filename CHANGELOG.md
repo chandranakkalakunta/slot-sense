@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### docs(testing): test strategy, suite model, and env promotion
+
+Added `docs/testing/TEST-STRATEGY.md` — inventory of existing suites, target
+smoke/regression/functional/performance packs, how to run them on test, and
+dev→test→prod promotion principles (same SHA, gates, manual promote until
+multi-env CI exists).
+
+### fix(arch): move platform-admin profile Firestore access to repository layer
+
+`api/v1/users.py` imported `google.cloud.firestore` (DELETE_FIELD), breaking
+`test_handlers_do_not_import_firestore`. Profile get/clear now via
+`PlatformAdminRepository` / `UserProfileRepository`.
+
 ### feat(auth)+feat(admin): force platform-admin password change, 6-digit initial codes, facility catalog CRUD
 
 Closes three product gaps found on first test-01 login:

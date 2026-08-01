@@ -1,7 +1,6 @@
 import firebase_admin.auth as fb_auth
 import structlog
 from fastapi import APIRouter, Depends
-from google.cloud import firestore
 from pydantic import BaseModel
 
 from sport_slot.api import error_codes
@@ -11,20 +10,11 @@ from sport_slot.auth.credentials import is_temp_password_expired
 from sport_slot.auth.dependency import get_tenant_context
 from sport_slot.auth.password_policy import validate_password
 from sport_slot.dependencies import get_firestore_client
+from sport_slot.repositories.platform_admins import PlatformAdminRepository
 from sport_slot.repositories.user_profiles import UserProfileRepository
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/users", tags=["users"])
-
-
-def _platform_admin_profile(client, uid: str) -> dict | None:
-    snap = client.collection("platform_admins").document(uid).get()
-    if not snap.exists:
-        return None
-    data = snap.to_dict() or {}
-    data.setdefault("uid", uid)
-    data.setdefault("role", "platform_admin")
-    return data
 
 
 @router.get("/me")
@@ -34,7 +24,7 @@ async def get_me(
 ):
     # Platform admins live in platform_admins/{uid}, not tenants/{id}/users.
     if ctx.role == "platform_admin":
-        profile = _platform_admin_profile(client, ctx.uid)
+        profile = PlatformAdminRepository(client).get(ctx.uid)
         if profile is None:
             raise ApiError(
                 404,
@@ -63,26 +53,16 @@ async def change_password(
     ctx: TenantContext = Depends(get_tenant_context),
     client=Depends(get_firestore_client),
 ):
-    # Load profile for expiry check when force-change is pending
     profile: dict | None = None
-    platform_ref = None
-    tenant_ref = None
+    platform_repo: PlatformAdminRepository | None = None
+    user_repo: UserProfileRepository | None = None
 
     if ctx.role == "platform_admin":
-        platform_ref = client.collection("platform_admins").document(ctx.uid)
-        snap = platform_ref.get()
-        if snap.exists:
-            profile = snap.to_dict() or {}
+        platform_repo = PlatformAdminRepository(client)
+        profile = platform_repo.get(ctx.uid)
     elif ctx.tenant_id:
-        tenant_ref = (
-            client.collection("tenants")
-            .document(ctx.tenant_id)
-            .collection("users")
-            .document(ctx.uid)
-        )
-        snap = tenant_ref.get()
-        if snap.exists:
-            profile = snap.to_dict() or {}
+        user_repo = UserProfileRepository(ctx, client)
+        profile = user_repo.get(ctx.uid)
 
     if profile and profile.get("must_change_password"):
         expires = profile.get("temp_password_expires_at")
@@ -106,13 +86,9 @@ async def change_password(
         raise ApiError(422, error_codes.WEAK_PASSWORD, " ".join(result.errors))
     fb_auth.update_user(ctx.uid, password=body.new_password)
 
-    clear_fields = {
-        "must_change_password": False,  # nosec B105 - Firestore field name
-        "temp_password_expires_at": firestore.DELETE_FIELD,
-    }
-    if platform_ref is not None and platform_ref.get().exists:
-        platform_ref.update(clear_fields)
-    elif tenant_ref is not None and tenant_ref.get().exists:
-        tenant_ref.update(clear_fields)
+    if platform_repo is not None:
+        platform_repo.clear_must_change_password(ctx.uid)
+    elif user_repo is not None:
+        user_repo.clear_must_change_password(ctx.uid)
 
     return {"status": "ok"}
