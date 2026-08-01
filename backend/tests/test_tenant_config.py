@@ -484,7 +484,8 @@ async def test_tenant_admin_reset_password_returns_temp_password(make_client):
     body = resp.json()
     assert body["uid"] == "u-99"
     assert "temp_password" in body
-    assert len(body["temp_password"]) > 8
+    assert len(body["temp_password"]) == 6
+    assert body["temp_password"].isdigit()
 
 
 async def test_tenant_admin_reset_password_sets_must_change(make_client):
@@ -502,7 +503,10 @@ async def test_tenant_admin_reset_password_sets_must_change(make_client):
            .document.return_value
            .collection.return_value
            .document.return_value)
-    ref.update.assert_called_with({"must_change_password": True})
+    ref.update.assert_called_once()
+    update_payload = ref.update.call_args[0][0]
+    assert update_payload["must_change_password"] is True
+    assert "temp_password_expires_at" in update_payload
 
 
 async def test_tenant_reset_password_unknown_user_404(make_client):

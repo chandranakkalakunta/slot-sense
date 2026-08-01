@@ -20,11 +20,20 @@ sign in fresh — refreshing an existing token is not enough.
 import argparse
 import datetime
 import os
-import secrets
+import sys
+from pathlib import Path
+
+# Allow running as `uv run python scripts/seed_platform_admin.py` from backend/
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import firebase_admin
 import firebase_admin.auth as fb_auth
 from google.cloud import firestore
+
+from sport_slot.auth.credentials import (
+    generate_initial_password,
+    temp_password_expires_at,
+)
 
 ADMIN_EMAIL = os.environ.get(
     "PLATFORM_ADMIN_EMAIL", "admin@chandraailabs.com"
@@ -52,7 +61,7 @@ def main() -> None:
     if not firebase_admin._apps:
         firebase_admin.initialize_app(options={"projectId": project})
 
-    temp_password = secrets.token_urlsafe(16)
+    temp_password = generate_initial_password()
 
     try:
         user = fb_auth.create_user(
@@ -61,7 +70,7 @@ def main() -> None:
         print(f"[seed] Created platform admin: {ADMIN_EMAIL}")
     except fb_auth.EmailAlreadyExistsError:
         user = fb_auth.get_user_by_email(ADMIN_EMAIL)
-        fb_auth.update_user(user.uid, password=temp_password)
+        fb_auth.update_user(user.uid, password=temp_password, disabled=False)
         print(f"[seed] Reset password for existing platform admin: {ADMIN_EMAIL}")
 
     fb_auth.set_custom_user_claims(user.uid, {
@@ -78,6 +87,7 @@ def main() -> None:
             "email": ADMIN_EMAIL,
             "role": "platform_admin",
             "must_change_password": True,
+            "temp_password_expires_at": temp_password_expires_at(),
             "created_at": datetime.datetime.now(datetime.UTC),
         },
         merge=True,
@@ -87,6 +97,7 @@ def main() -> None:
     print(f"[seed] Temp password: {temp_password}")
     print("[seed] Custom claims: role=platform_admin, tenant_id=null")
     print("[seed] Profile written to platform_admins collection")
+    print("[seed] must_change_password=true (forced change on first login)")
 
 
 if __name__ == "__main__":

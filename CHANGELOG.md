@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### feat(auth)+feat(admin): force platform-admin password change, 6-digit initial codes, facility catalog CRUD
+
+Closes three product gaps found on first test-01 login:
+
+1. **Platform admin force-change** — `usePasswordGate` no longer excludes
+   `platform_admin`; `PlatformRoute` redirects to `/force-password`;
+   `GET/POST /users/me` reads and clears `platform_admins/{uid}`.
+2. **ADR-0044** — initial credentials are 6-digit codes
+   (`generate_initial_password`); user password min length 8; 24h
+   `temp_password_expires_at` on provision/reset/seed; expired codes
+   refuse change and disable the account (`TEMP_PASSWORD_EXPIRED`).
+3. **Facility catalog admin CRUD** — `POST/PATCH/DELETE
+   /admin/facility-catalog` + `/admin/facility-catalog` UI; tenants still
+   pick types when creating instances.
+
 ### fix(dr): drop rvrg-* from bootstrap public host (admin host only)
 
 Bootstrap no longer invents a demo tenant hostname (`rvrg-dev` /

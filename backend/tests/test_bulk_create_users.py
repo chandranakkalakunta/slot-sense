@@ -84,7 +84,8 @@ async def test_bulk_admin_all_rows_created(make_client):
     assert results[0]["row"] == 1
     assert results[0]["email"] == "alice@demo.com"
     assert "temp_password" in results[0]
-    assert len(results[0]["temp_password"]) > 8
+    assert len(results[0]["temp_password"]) == 6
+    assert results[0]["temp_password"].isdigit()
 
     assert results[1]["row"] == 2
     assert results[1]["email"] == "bob@demo.com"

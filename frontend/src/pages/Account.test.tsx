@@ -47,7 +47,7 @@ test("pw < 12 chars -> client error, apiFetch NOT called", () => {
     target: { value: "short" },
   });
   fireEvent.click(screen.getByRole("button", { name: /change password/i }));
-  expect(screen.getByText(/at least 12 characters/i)).toBeInTheDocument();
+  expect(screen.getByText(/at least 8 characters/i)).toBeInTheDocument();
   expect(apiFetch).not.toHaveBeenCalled();
 });
 

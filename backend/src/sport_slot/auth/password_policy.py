@@ -13,7 +13,8 @@ import zxcvbn as _zxcvbn
 
 log = structlog.get_logger()
 
-MIN_LENGTH = 12
+# ADR-0044 D1: floor 12 → 8 (strength gate + HIBP unchanged)
+MIN_LENGTH = 8
 MAX_LENGTH = 64
 MIN_ZXCVBN_SCORE = 3            # zxcvbn score is 0–4; require ≥ 3
 HIBP_TIMEOUT_SECONDS = 2.0

@@ -55,3 +55,66 @@ export function useCreateUser(tenantId: string) {
       }),
   });
 }
+
+/** Global facility-type catalog (ADR-0015) — platform admin CRUD. */
+export interface CatalogType {
+  type_id: string;
+  name: string;
+  sport: string;
+}
+
+export function useAdminFacilityCatalog() {
+  return useQuery({
+    queryKey: ["admin", "facility-catalog"],
+    queryFn: () => apiFetch<{ items: CatalogType[] }>("/facility-catalog"),
+  });
+}
+
+export function useCreateCatalogType() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CatalogType) =>
+      apiFetch<CatalogType>("/admin/facility-catalog", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin", "facility-catalog"] });
+      void qc.invalidateQueries({ queryKey: ["facility-catalog"] });
+    },
+  });
+}
+
+export function useUpdateCatalogType() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      type_id,
+      ...body
+    }: {
+      type_id: string;
+      name?: string;
+      sport?: string;
+    }) =>
+      apiFetch<CatalogType>(`/admin/facility-catalog/${type_id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin", "facility-catalog"] });
+      void qc.invalidateQueries({ queryKey: ["facility-catalog"] });
+    },
+  });
+}
+
+export function useDeleteCatalogType() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (typeId: string) =>
+      apiFetch(`/admin/facility-catalog/${typeId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin", "facility-catalog"] });
+      void qc.invalidateQueries({ queryKey: ["facility-catalog"] });
+    },
+  });
+}

@@ -18,6 +18,7 @@ import ResetPassword from "./pages/ResetPassword";
 import SignIn from "./pages/SignIn";
 import CreateTenant from "./pages/admin/CreateTenant";
 import CreateUser from "./pages/admin/CreateUser";
+import FacilityCatalog from "./pages/admin/FacilityCatalog";
 import TenantList from "./pages/admin/TenantList";
 import TenantBranding from "./pages/tenant/TenantBranding";
 import TenantDailyOverview from "./pages/tenant/TenantDailyOverview";
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="/assistant"
             element={<ProtectedRoute><Assistant /></ProtectedRoute>} />
           <Route path="/admin" element={<PlatformRoute><TenantList /></PlatformRoute>} />
+          <Route path="/admin/facility-catalog" element={<PlatformRoute><FacilityCatalog /></PlatformRoute>} />
           <Route path="/admin/tenants/new" element={<PlatformRoute><CreateTenant /></PlatformRoute>} />
           <Route path="/admin/tenants/:tenantId/users/new" element={<PlatformRoute><CreateUser /></PlatformRoute>} />
           <Route path="/tenant" element={<TenantAdminRoute><TenantDashboard /></TenantAdminRoute>} />

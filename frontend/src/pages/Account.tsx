@@ -17,7 +17,7 @@ export default function Account() {
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (pw.length < 12) { setError("Password must be at least 12 characters."); return; }
+    if (pw.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (pw !== confirm) { setError("Passwords don't match."); return; }
     setBusy(true);
     try {
