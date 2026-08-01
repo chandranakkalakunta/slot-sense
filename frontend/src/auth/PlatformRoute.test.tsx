@@ -7,8 +7,12 @@ import { PlatformRoute } from "./PlatformRoute";
 vi.mock("./AuthContext", () => ({
   useAuth: vi.fn(),
 }));
+vi.mock("./usePasswordGate", () => ({
+  usePasswordGate: vi.fn(() => ({ mustChange: false, loading: false })),
+}));
 
 import { useAuth } from "./AuthContext";
+import { usePasswordGate } from "./usePasswordGate";
 
 function authState(role: string, hasUser = true) {
   return {
@@ -47,12 +51,24 @@ describe("PlatformRoute", () => {
 
   it("renders children for platform_admin", () => {
     vi.mocked(useAuth).mockReturnValue(authState("platform_admin"));
+    vi.mocked(usePasswordGate).mockReturnValue({ mustChange: false, loading: false });
     render(
       <MemoryRouter>
         <PlatformRoute><div>Admin Dashboard</div></PlatformRoute>
       </MemoryRouter>,
     );
     expect(screen.getByText("Admin Dashboard")).toBeInTheDocument();
+  });
+
+  it("redirects platform_admin to /force-password when must_change_password", () => {
+    vi.mocked(useAuth).mockReturnValue(authState("platform_admin"));
+    vi.mocked(usePasswordGate).mockReturnValue({ mustChange: true, loading: false });
+    render(
+      <MemoryRouter>
+        <PlatformRoute><div>Admin Dashboard</div></PlatformRoute>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText("Admin Dashboard")).not.toBeInTheDocument();
   });
 
   it("redirects to /signin when not logged in", () => {

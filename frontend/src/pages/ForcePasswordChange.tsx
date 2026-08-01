@@ -26,7 +26,7 @@ export default function ForcePasswordChange() {
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (pw.length < 12) { setError("Password must be at least 12 characters."); return; }
+    if (pw.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (pw !== confirm) { setError("Passwords don't match."); return; }
     setBusy(true);
     try {
@@ -65,7 +65,8 @@ export default function ForcePasswordChange() {
   return (
     <AuthCard title="Set a new password">
       <p className="text-sm text-muted-foreground">
-        Your account uses a temporary password. Please set a new one to continue.
+        Your account uses a temporary code. Please set a new password (at least
+        8 characters, hard to guess) to continue.
       </p>
       <form onSubmit={submit} className="space-y-2">
         <div className="space-y-1">

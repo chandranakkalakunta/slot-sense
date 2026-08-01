@@ -27,10 +27,11 @@ or more named instances with that type and tenant-specific config
 (name, open/close, slot duration, description). Multiple instances
 per type are allowed (Court 1, Court 2).
 
-### 3. Catalog management deferred
-The catalog is seeded data in v1; platform-admin CRUD over catalog
-types is deferred (not needed until a new sport must be added at
-runtime). The data exists; the management UI does not.
+### 3. Catalog management (platform admin)
+~~Deferred in v1~~ **Implemented (2026-08):** platform-admin CRUD over
+catalog types at `POST/PATCH/DELETE /api/v1/admin/facility-catalog` and
+the `/admin/facility-catalog` UI. Seed script remains for bootstrap of
+standard types. Tenants continue to select types when creating instances.
 
 ### 4. Migration of the existing facility
 The existing free-form "Badminton Court 1" (sport=badminton, no

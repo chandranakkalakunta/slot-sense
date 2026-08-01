@@ -1,6 +1,5 @@
 """User provisioning service — single path for all user creation (ADR-0016)."""
 import datetime
-import secrets
 
 import firebase_admin.auth as fb_auth
 import structlog
@@ -8,6 +7,10 @@ import structlog
 from sport_slot.api import error_codes
 from sport_slot.api.errors import ApiError
 from sport_slot.auth.context import TenantContext
+from sport_slot.auth.credentials import (
+    generate_initial_password,
+    temp_password_expires_at,
+)
 from sport_slot.config import get_settings
 from sport_slot.notifications.tasks import enqueue_notification
 from sport_slot.repositories.bookings import AuditRepository
@@ -70,7 +73,7 @@ class UserProvisioningService:
         tenant_snap = self._client.collection("tenants").document(tenant_id).get()
         tenant_slug = (tenant_snap.to_dict() or {}).get("slug") if tenant_snap.exists else None
 
-        temp_password = secrets.token_urlsafe(16)
+        temp_password = generate_initial_password()
         try:
             user = fb_auth.create_user(
                 email=email, display_name=display_name, password=temp_password
@@ -95,6 +98,7 @@ class UserProvisioningService:
                 "household_id": hid,
                 "role": role,
                 "must_change_password": True,  # nosec B105 - Firestore field name, not a credential
+                "temp_password_expires_at": temp_password_expires_at(),
                 "created_at": datetime.datetime.now(datetime.UTC),
             })
             AuditRepository(ctx, self._client).write_event(
@@ -230,9 +234,12 @@ class UserProvisioningService:
                .collection("users").document(uid))
         if not ref.get().exists:
             raise ProvisioningError(404, error_codes.USER_NOT_FOUND, f"User {uid!r} not found")
-        password = secrets.token_urlsafe(16)
-        fb_auth.update_user(uid, password=password)
-        ref.update({"must_change_password": True})  # nosec B105 - Firestore field name, not a credential
+        password = generate_initial_password()
+        fb_auth.update_user(uid, password=password, disabled=False)
+        ref.update({
+            "must_change_password": True,  # nosec B105 - Firestore field name, not a credential
+            "temp_password_expires_at": temp_password_expires_at(),
+        })
         AuditRepository(_ctx(tenant_id, self._caller_uid or "", self._caller_role or ""),
                         self._client).write_event(
             "user.password_reset", self._caller_uid or "", self._caller_role or "", uid,

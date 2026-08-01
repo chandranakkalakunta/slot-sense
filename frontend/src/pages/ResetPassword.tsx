@@ -57,8 +57,8 @@ export default function ResetPassword() {
     e.preventDefault();
     setError(null);
     setTokenError(false);
-    if (pw.length < 12) {
-      setError("Password must be at least 12 characters.");
+    if (pw.length < 8) {
+      setError("Password must be at least 8 characters.");
       return;
     }
     if (pw !== confirm) {

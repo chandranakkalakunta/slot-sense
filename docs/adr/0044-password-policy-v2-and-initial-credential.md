@@ -1,6 +1,6 @@
 # ADR-0044: Password Policy v2 & 6-Digit Initial Credential
 
-- **Status:** Proposed (awaiting Coordinator approval)
+- **Status:** Accepted (implemented 2026-08)
 - **Date:** 2026-07-26
 - **Deciders:** Coordinator (Chandra), Strategist
 - **Phase:** post-17 (product/UX + security)

@@ -11,9 +11,9 @@ POLICY = "sport_slot.auth.password_policy"
 async def test_too_short_rejected():
     from sport_slot.auth.password_policy import validate_password
 
-    result = await validate_password("Short1!")
+    result = await validate_password("Short1!")  # 7 chars — below min 8
     assert not result.ok
-    assert any("12" in e for e in result.errors)
+    assert any("8" in e for e in result.errors)
 
 
 async def test_too_long_rejected():
@@ -25,12 +25,12 @@ async def test_too_long_rejected():
 
 
 async def test_long_but_weak_rejected_by_zxcvbn_and_hibp_not_called():
-    """Length >= 12 but zxcvbn score < 3; HIBP must NOT be contacted."""
+    """Length >= 8 but zxcvbn score < 3; HIBP must NOT be contacted."""
     from sport_slot.auth.password_policy import validate_password
 
     with patch(f"{POLICY}._is_pwned") as mock_pwned:
-        # "password123456" — 14 chars (passes length), zxcvbn score=1 (fails strength)
-        result = await validate_password("password123456")
+        # "password1" — 9 chars (passes length), weak zxcvbn (fails strength)
+        result = await validate_password("password1")
 
     assert not result.ok
     assert any("easily guessed" in e for e in result.errors)

@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     reset_cooldown_seconds: int = 900
     reset_continue_url: str = "https://slotsense.chandraailabs.com/reset"
     welcome_login_url: str = "https://slotsense.chandraailabs.com/signin"
+    # ADR-0044 D5: initial 6-digit credential TTL (hours)
+    temp_password_ttl_hours: int = 24
     vertex_project: str = "sport-slot-dev"
     vertex_location: str = "asia-south1"
     agent_model: str = "gemini-2.5-flash"

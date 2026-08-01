@@ -28,13 +28,20 @@ export default function TenantList() {
       <main className="mx-auto max-w-6xl px-4 py-6 space-y-4">
         <h1 className="text-2xl font-semibold text-foreground">Platform Admin</h1>
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-foreground">Tenants</h2>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/admin/tenants/new" style={{ textDecoration: "none" }}>
-              + New tenant
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link to="/admin/facility-catalog" style={{ textDecoration: "none" }}>
+                Facility catalog
+              </Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/admin/tenants/new" style={{ textDecoration: "none" }}>
+                + New tenant
+              </Link>
+            </Button>
+          </div>
         </div>
 
         {isLoading && <p className="text-sm text-muted-foreground">Loading tenants…</p>}

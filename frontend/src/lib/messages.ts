@@ -30,7 +30,11 @@ const CATALOG: Catalog = {
     USER_EMAIL_TAKEN: "That email is already registered.",
     USER_NOT_FOUND: "User not found.",
     SELF_DEACTIVATION_FORBIDDEN: "You can't deactivate your own account.",
-    WEAK_PASSWORD: "Password must be at least 12 characters or stronger.",
+    WEAK_PASSWORD: "Password must be at least 8 characters and hard to guess.",
+    TEMP_PASSWORD_EXPIRED:
+      "Your temporary code has expired. Ask an admin to issue a new one.",
+    CATALOG_TYPE_EXISTS: "That facility type already exists.",
+    CATALOG_TYPE_NOT_FOUND: "Facility type not found.",
     RESET_TOKEN_INVALID: "This reset link is invalid or has expired. Please request a new one.",
   },
 };

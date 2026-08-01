@@ -58,7 +58,7 @@ test("token stripped from URL on mount via history.replaceState", () => {
 test("pw < 12 chars -> client error shown, apiFetch NOT called", () => {
   renderWithToken("tok_abc123");
   fillAndSubmit("short", "short");
-  expect(screen.getByText(/at least 12 characters/i)).toBeInTheDocument();
+  expect(screen.getByText(/at least 8 characters/i)).toBeInTheDocument();
   expect(apiFetch).not.toHaveBeenCalled();
 });
 
