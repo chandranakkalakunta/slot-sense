@@ -1,4 +1,5 @@
 import firebase_admin.auth as fb_auth
+import structlog
 from fastapi import APIRouter, Depends
 from google.cloud import firestore
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ from sport_slot.auth.password_policy import validate_password
 from sport_slot.dependencies import get_firestore_client
 from sport_slot.repositories.user_profiles import UserProfileRepository
 
+log = structlog.get_logger()
 router = APIRouter(prefix="/users", tags=["users"])
 
 
@@ -87,8 +89,12 @@ async def change_password(
         if is_temp_password_expired(expires):
             try:
                 fb_auth.update_user(ctx.uid, disabled=True)
-            except Exception:  # noqa: BLE001 - best-effort disable
-                pass
+            except Exception as exc:  # noqa: BLE001 - best-effort disable
+                log.warning(
+                    "temp_password_disable_failed",
+                    uid=ctx.uid,
+                    error=str(exc),
+                )
             raise ApiError(
                 403,
                 error_codes.TEMP_PASSWORD_EXPIRED,
