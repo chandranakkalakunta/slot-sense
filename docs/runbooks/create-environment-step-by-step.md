@@ -122,8 +122,8 @@ below.
 | **Environment type** | One of: `dev`, `test`, `prod-india`, `prod-uae` | `dev` | `test` | |
 | **Project ID** | Must match pattern: `slot-sense-{dev\|test\|prod-XX}[-NN]` | `slot-sense-dev-04` | `slot-sense-test-01` | |
 | **Region** | Default `asia-south1` (use unless told otherwise) | `asia-south1` | `asia-south1` | |
-| **Public website host** | Auto from env type (Pattern B) | `rvrg-dev.slotsense.chandraailabs.com` | `rvrg-test.slotsense.chandraailabs.com` | |
-| **Admin host** | Auto from env type | `admin-dev.slotsense.chandraailabs.com` | `admin-test.slotsense.chandraailabs.com` | |
+| **Platform admin host** | Auto from env (no tenant name) | `admin-dev.slotsense.chandraailabs.com` | `admin-test.slotsense.chandraailabs.com` | |
+| **Tenant hosts** | Created later when you add a tenant — not by bootstrap | e.g. `myclub-dev.…` | e.g. `myclub-test.…` | |
 
 **Project ID rules (must match exactly):**
 
@@ -133,14 +133,19 @@ below.
 
 **Host defaults (script chooses these unless you override):**
 
-| Environment type | Public host | Admin host |
-|---|---|---|
-| `dev` | `rvrg-dev.slotsense.chandraailabs.com` | `admin-dev.slotsense.chandraailabs.com` |
-| `test` | `rvrg-test.slotsense.chandraailabs.com` | `admin-test.slotsense.chandraailabs.com` |
-| `prod-india` or `prod-uae` | `rvrg.slotsense.chandraailabs.com` | `admin.slotsense.chandraailabs.com` |
+| Environment type | Platform admin + health (no tenant) |
+|---|---|
+| `dev` | `admin-dev.slotsense.chandraailabs.com` |
+| `test` | `admin-test.slotsense.chandraailabs.com` |
+| `prod-india` or `prod-uae` | `admin.slotsense.chandraailabs.com` |
 
-> **Tip:** Write your Project ID and public host on a sticky note. You will
-> type them several times.
+Bootstrap does **not** create a demo tenant hostname. After go-live, each
+tenant gets `{slug}.slotsense…` DNS → **this env’s** LB IP.
+
+**Do not** point `*.slotsense…` at a single LB if dev/test/prod must all
+run — use explicit A records per env host to each project’s IP.
+
+> **Tip:** Write your Project ID and admin host on a sticky note.
 
 ---
 

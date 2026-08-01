@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### fix(dr): drop rvrg-* from bootstrap public host (admin host only)
+
+Bootstrap no longer invents a demo tenant hostname (`rvrg-dev` /
+`rvrg-test` / `rvrg`) as the env entry URL — that mixed tenant slug with
+environment and broke multi-env mental model. Health + login host defaults
+to platform admin only (`admin-dev` / `admin-test` / `admin`). Manifest DNS
+section warns against a single `*.slotsense` A → one LB IP when dev/test/prod
+must run together. Tenant hosts are operator-created when tenants are added.
+
 ### fix(tooling): Phase 7 tf.sh registry edit — portable awk + register test-01
 
 `ensure_tf_sh_registry_entry` used awk `/^\s*\*)/` which does **not**
