@@ -232,6 +232,38 @@ wait_firebase_operation() {
   return 1
 }
 
+# Ground-truth: is Firebase enabled on THIS project?
+# Prefer Firebase Management REST (gcloud ADC) over `firebase projects:list
+# | grep` — the CLI list is eventually consistent and can miss a project
+# for tens of seconds right after addfirebase (live: slot-sense-test-01
+# 2026-08-01 — addfirebase printed success, then Phase 2 failed verify).
+# Retries with backoff so a brief propagation lag is not fatal.
+verify_firebase_on_project() {
+  local project="$1"
+  local attempt=1 max_attempts=12 sleep_s=5
+  local body state
+
+  while [[ ${attempt} -le ${max_attempts} ]]; do
+    body="$(firebase_rest GET "https://firebase.googleapis.com/v1beta1/projects/${project}" 2>/dev/null || true)"
+    state="$(echo "${body}" | jq -r '.state // empty' 2>/dev/null || true)"
+    if [[ "${state}" == "ACTIVE" ]] \
+      && echo "${body}" | jq -e --arg p "${project}" '.projectId == $p' >/dev/null 2>&1; then
+      log "Verified Firebase ACTIVE on ${project} via Management API (attempt ${attempt})."
+      return 0
+    fi
+    # Secondary signal: CLI list (may still lag; never the sole attempt-1 check).
+    if firebase projects:list 2>/dev/null | grep -F "${project}" >/dev/null 2>&1; then
+      log "Verified Firebase on ${project} via firebase projects:list (attempt ${attempt})."
+      return 0
+    fi
+    log "Firebase not yet visible on ${project} (attempt ${attempt}/${max_attempts}); waiting ${sleep_s}s..."
+    sleep "${sleep_s}"
+    attempt=$((attempt + 1))
+  done
+  log "Last Management API body: ${body:-<empty>}"
+  return 1
+}
+
 # Ensure a WEB app exists and write its public SDK config to
 # FIREBASE_WEB_CONFIG_FILE. Idempotent. Uses Firebase Management REST
 # (gcloud ADC) so a mid-run firebase CLI token expiry cannot skip this.
@@ -803,12 +835,11 @@ phase2() {
   # firebase-tools versions — the `|| true` above is deliberate. Wording
   # in its stdout is not a stable success signal across CLI versions
   # (dev-03 drill: WARNING fired despite Firebase being correctly
-  # enabled), so verify via projects:list instead — a stable API-shaped,
-  # ground-truth check.
-  if ! firebase projects:list 2>/dev/null | grep -q "${PROJECT_ID}"; then
-    fail 2 "Firebase resources not detected on project after addfirebase. Check ${CMDLOG_FILE}."
-  fi
-  log "Verified: Firebase resources present on ${PROJECT_ID}."
+  # enabled). Verify with Management REST + retries — NOT a single
+  # `firebase projects:list | grep` (test-01 2026-08-01: list lagged
+  # after a successful addfirebase and false-failed Phase 2).
+  verify_firebase_on_project "${PROJECT_ID}" \
+    || fail 2 "Firebase resources not detected on project after addfirebase (Management API + projects:list still negative after retries). Check ${CMDLOG_FILE}."
 
   # WEB app + public SDK config — required so Phase 7 can build the SPA
   # against THIS project rather than the committed frontend/.env.production

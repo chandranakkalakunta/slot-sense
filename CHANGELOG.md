@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### fix(tooling): Phase 2 Firebase verify — REST + retries (not flaky projects:list)
+
+`firebase projects:addfirebase` can succeed while a subsequent
+`firebase projects:list | grep` still misses the project for tens of
+seconds (live on `slot-sense-test-01`, 2026-08-01). Phase 2 now verifies
+via Firebase Management REST (`projects.get`, state=ACTIVE) with retries,
+falling back to CLI list only as a secondary signal.
+
 ### docs(runbooks): plain-English create-environment step-by-step guide
 
 Added `docs/runbooks/create-environment-step-by-step.md` — full start-to-finish
