@@ -188,13 +188,19 @@ scripts/drill-bootstrap.sh --project-id <new> --start-phase <N> --yes
 | Password-manager capture of temp admin password | **Manual** |
 | GitHub Actions `deploy.yml` target project | **Manual** until CI is multi-env |
 
-Default hosts (Pattern B, overridable with flags):
+Default hosts (overridable with flags). **No tenant name in bootstrap** —
+platform admin only. Tenants get their own `{slug}.<base>` DNS later.
 
-| `--environment` | Public host | Admin host |
-|---|---|---|
-| `dev` | `rvrg-dev.<base>` | `admin-dev.<base>` |
-| `test` | `rvrg-test.<base>` | `admin-test.<base>` |
-| `prod-india` / `prod-uae` | `rvrg.<base>` | `admin.<base>` |
+| `--environment` | Platform admin + health host |
+|---|---|
+| `dev` | `admin-dev.<base>` |
+| `test` | `admin-test.<base>` |
+| `prod-india` / `prod-uae` | `admin.<base>` |
+
+**Multi-env DNS:** do **not** point `*.slotsense…` at a single LB IP.
+Each env has its own LB; use explicit A records (`admin-test` → test IP,
+`admin-dev` → dev IP). The wildcard is for the **TLS certificate**, not
+one shared A record.
 
 ## Post-run manual tail
 
@@ -208,13 +214,13 @@ Default hosts (Pattern B, overridable with flags):
 
 3. **Create DNS records at Namecheap** (exact values are in the
    manifest):
-   - A: public host (e.g. `rvrg-dev.slotsense.chandraailabs.com`) → LB IP
-   - A: admin host (e.g. `admin-dev.slotsense.chandraailabs.com`) → LB IP
+   - A: platform admin host (e.g. `admin-test.slotsense.chandraailabs.com`)
+     → **this env’s** LB IP only
+   - Later, per tenant: A `{slug}.slotsense…` → **same** env LB IP
    - CNAME for cert renewal: `<name>` → `<value>` — **permanent, do
      not delete**.
-   The wildcard `*.slotsense.chandraailabs.com` cert already covers
-   one label under the domain — no new certificate request is needed
-   for standard Pattern B labels.
+   Do **not** use one global `*.slotsense → one IP` if dev/test/prod
+   must all stay up (that would pin every subdomain to one project).
 
 4. **Wait for the cert to go ACTIVE** (~5–30 min after DNS
    propagates):
@@ -224,10 +230,10 @@ Default hosts (Pattern B, overridable with flags):
 
 5. **Verify end-to-end:**
    ```
-   curl -sf https://rvrg-dev.slotsense.chandraailabs.com/health   # example for dev
+   curl -sf https://admin-test.slotsense.chandraailabs.com/health   # example for test
    ```
-   Should return `{"status":"ok"}`. Then sign in at the public host
-   with the seeded admin credentials (fresh browser session).
+   Should return `{"status":"ok"}`. Then sign in at the **admin** host
+   with the seeded platform-admin credentials (fresh browser session).
 
 ## When it fails partway
 

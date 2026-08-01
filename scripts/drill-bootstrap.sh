@@ -157,19 +157,35 @@ record_elapsed() {
 }
 
 # ─── Multi-env host + registry helpers ──────────────────────────────────
-# DNS Pattern B (docs/backlog.md DNS-PATTERN-B): one wildcard cert covers
-# rvrg-dev / rvrg-test / rvrg under *.slotsense.chandraailabs.com.
+# Host model (flat one-label names under base_domain so a single cert
+# *.slotsense.chandraailabs.com still works):
+#
+#   Platform admin / env entry (NO tenant slug):
+#     dev  → admin-dev.<base>
+#     test → admin-test.<base>
+#     prod → admin.<base>
+#
+#   Tenants (created later in the product, NOT by bootstrap):
+#     {tenant-slug}.<base>  e.g. acme-test.<base>, rvrg-dev.<base>
+#     Each tenant host is an A/CNAME to THAT env's LB IP. Bootstrap never
+#     invents a demo tenant name (rvrg-*) — that mixed "env" with "tenant"
+#     and confused operators.
+#
+# Multi-env simultaneous: do NOT point *.slotsense at a single LB IP.
+# That would send admin-dev AND admin-test to the same project. Use
+# explicit A records per env host → that env's LB IP (see Phase 9 manifest).
 derive_public_host_label() {
+  # Health-check / curl host = same left-label as platform admin (no tenant).
   case "$1" in
-    dev) echo "rvrg-dev" ;;
-    test) echo "rvrg-test" ;;
-    prod-india|prod-uae) echo "rvrg" ;;
-    *) echo "rvrg-dev" ;;
+    dev) echo "admin-dev" ;;
+    test) echo "admin-test" ;;
+    prod-india|prod-uae) echo "admin" ;;
+    *) echo "admin-dev" ;;
   esac
 }
 
 # Per-env admin host so test/dev/prod can coexist under the same wildcard
-# without fighting over a single admin A-record.
+# cert without sharing one admin A-record target.
 derive_admin_host() {
   local env="$1" base="$2"
   case "$env" in
@@ -1344,21 +1360,29 @@ phase9() {
     echo ""
     echo "## Login (after DNS)"
     echo ""
-    echo "- App URL: \`https://${public_host}\`"
-    echo "- Admin host (SPA): \`https://${ADMIN_HOST}\` (A record must also point at the LB IP below)"
+    echo "- Platform admin URL (no tenant): \`https://${ADMIN_HOST}\`"
+    echo "- Health-check host (same as admin by default): \`https://${public_host}\`"
     echo "- Firebase Auth project: **${PROJECT_ID}** (frontend is built against this — not sport-slot-dev)"
     echo "- Platform admin email: \`${ADMIN_EMAIL_CAPTURED:-admin@chandraailabs.com}\`"
     echo "- Temp password: \`${ADMIN_TEMP_PASSWORD:-<not captured — re-run seed_platform_admin.py --project ${PROJECT_ID}>}\`"
     echo "- Sign in **fresh** (sign-out first if any old session); custom claims only appear on a new ID token."
+    echo "- Tenant hosts are **not** created by bootstrap. After you create a tenant with slug"
+    echo "  e.g. \`myclub-test\`, add DNS A: \`myclub-test.${BASE_DOMAIN}\` → this LB IP, then open that URL."
     echo ""
     echo "## Load balancer + DNS (manual — external registrar)"
     echo ""
-    echo "- LB static IP: **${lb_ip}**"
-    echo "- DNS records to create at Namecheap (Pattern B — one wildcard cert covers these):"
-    echo "  - A: \`${public_host}\` → \`${lb_ip}\`"
-    echo "  - A: \`${ADMIN_HOST}\` → \`${lb_ip}\` (if not already covered by a wildcard A you manage)"
+    echo "- LB static IP for **this** environment only: **${lb_ip}**"
+    echo "- Do **not** set a single \`*.${BASE_DOMAIN}\` A record to this IP if dev/test/prod"
+    echo "  must run at the same time — that would send **all** subdomains here."
+    echo "- Create **explicit** A records for this env only:"
+    echo "  - A: \`${ADMIN_HOST}\` → \`${lb_ip}\`  (platform admin + health)"
+    if [[ "${public_host}" != "${ADMIN_HOST}" ]]; then
+      echo "  - A: \`${public_host}\` → \`${lb_ip}\`"
+    fi
+    echo "  - Later, per tenant: A: \`{tenant-slug}.${BASE_DOMAIN}\` → \`${lb_ip}\`"
     echo "  - CNAME (permanent, cert renewal): \`${cname_name}\` → \`${cname_data}\`"
-    echo "- After DNS: \`curl -sf https://${public_host}/health\` → \`{\"status\":\"ok\"}\`"
+    echo "- Wildcard cert \`*.${BASE_DOMAIN}\` covers HTTPS names; **DNS A/CNAME chooses which LB IP**."
+    echo "- After DNS: \`curl -sf https://${ADMIN_HOST}/health\` → \`{\"status\":\"ok\"}\`"
     echo ""
     echo "## Cloud Run"
     echo ""
