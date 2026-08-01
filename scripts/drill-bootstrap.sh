@@ -402,6 +402,11 @@ sync_frontend_to_gcs() {
 
 # Idempotently register this environment in scripts/tf.sh so subsequent
 # terraform work does not require a manual edit for a freshly built env.
+#
+# NOTE: use POSIX [[:space:]] in awk — NOT \s. macOS / BSD awk does not
+# treat \s as whitespace, so /^\s*\*)/ never matched the default arm and
+# Phase 7 died with "could not locate ENV_NAMES and/or *) arm" after a
+# successful admin seed (slot-sense-test-01, 2026-08-01).
 ensure_tf_sh_registry_entry() {
   local tfsh="${REPO_ROOT}/scripts/tf.sh"
   local reg="${REGISTRY_ENV_NAME}"
@@ -420,11 +425,13 @@ ensure_tf_sh_registry_entry() {
   awk -v reg="${reg}" -v project="${PROJECT_ID}" -v bucket="${STATE_BUCKET}" -v varfile="${TFVARS_NAME}" '
     BEGIN { added_names=0; added_case=0 }
     /^ENV_NAMES=/ && !added_names {
-      # Append the new env name inside the quoted list.
-      sub(/"$/, " " reg "\"")
+      # Append the new env name inside the quoted list (before closing ").
+      if (index($0, reg) == 0) {
+        sub(/"$/, " " reg "\"")
+      }
       added_names=1
     }
-    /^\s*\*\)/ && !added_case {
+    /^[[:space:]]*\*\)/ && !added_case {
       print "    " reg ")"
       print "      ENV_PROJECT_ID=\"" project "\""
       print "      ENV_BUCKET=\"" bucket "\""
@@ -437,6 +444,7 @@ ensure_tf_sh_registry_entry() {
     END {
       if (!added_names || !added_case) {
         print "ERROR: could not locate ENV_NAMES and/or *) arm in scripts/tf.sh" > "/dev/stderr"
+        print "  (hint: awk must match /^[[:space:]]*\\*)/ — \\s is not portable)" > "/dev/stderr"
         exit 1
       }
     }

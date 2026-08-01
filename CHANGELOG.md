@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### fix(tooling): Phase 7 tf.sh registry edit — portable awk + register test-01
+
+`ensure_tf_sh_registry_entry` used awk `/^\s*\*)/` which does **not**
+match on macOS/BSD awk (`\s` is not whitespace). After a successful
+admin seed on `slot-sense-test-01`, Phase 7d failed with "could not
+locate ENV_NAMES and/or *) arm". Switch to `[[:space:]]`; also commit
+the `test-01` registry arm so resume can skip the edit.
+
 ### fix(tooling): Phase 2 Firebase verify — REST + retries (not flaky projects:list)
 
 `firebase projects:addfirebase` can succeed while a subsequent
