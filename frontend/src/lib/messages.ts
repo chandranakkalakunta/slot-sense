@@ -33,7 +33,8 @@ const CATALOG: Catalog = {
     WEAK_PASSWORD: "Password must be at least 8 characters and hard to guess.",
     TEMP_PASSWORD_EXPIRED:
       "Your temporary code has expired. Ask an admin to issue a new one.",
-    CATALOG_TYPE_EXISTS: "That facility type already exists.",
+    CATALOG_TYPE_EXISTS:
+      "That Type ID already exists (or was not fully removed). Use a new id, or refresh the list.",
     CATALOG_TYPE_NOT_FOUND: "Facility type not found.",
     RESET_TOKEN_INVALID: "This reset link is invalid or has expired. Please request a new one.",
   },
