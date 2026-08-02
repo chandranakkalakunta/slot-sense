@@ -66,6 +66,12 @@ establishing the architectural foundation.
 |-----|-------|--------|---------|
 | [0018](0018-cicd-security-model.md) | CI/CD Security Model — Keyless Deploys via Direct WIF | Accepted | No static service-account keys anywhere; Workload Identity Federation with direct principalSet IAM bindings; deploy pipeline authenticates via WIF, not JSON credentials |
 
+## Multi-env ops & quality (post-17)
+
+| ADR | Title | Status | Summary |
+|-----|-------|--------|---------|
+| [0045](0045-test-strategy-and-environment-promotion.md) | Test Strategy & Environment Promotion | Accepted | Layered suites (static, unit regression, smoke, functional, perf); same-SHA progressive promote CI→dev→test→prod; prod human approval; runbook in docs/testing/TEST-STRATEGY.md |
+
 ## Phase 7 — Notifications & Self-Service Password Reset
 
 | ADR | Title | Status | Summary |

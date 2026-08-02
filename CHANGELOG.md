@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### docs(adr): ADR-0045 test strategy and environment promotion
+
+Accepted ADR defining layered suites (S-STATIC, S-REG-UNIT, S-SMOKE,
+S-FUNC, S-PERF, …), same-SHA progressive promote CI→dev→test→prod,
+prod human approval, and ordered implementation backlog (progressive
+CI and smoke first). Links `docs/testing/TEST-STRATEGY.md` as the
+living runbook.
+
 ### docs(testing): test strategy, suite model, and env promotion
 
 Added `docs/testing/TEST-STRATEGY.md` — inventory of existing suites, target
