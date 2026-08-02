@@ -16,6 +16,25 @@ import {
 import { ApiClientError } from "../../lib/api";
 import { messageForCode } from "../../lib/messages";
 
+/** Stable machine id: lowercase letters, numbers, hyphens only. */
+function slugifyTypeId(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
+
+function apiErrorText(err: unknown, fallback: string): string {
+  if (!(err instanceof ApiClientError)) return fallback;
+  // Prefer server detail (e.g. type_id format) over generic catalog text.
+  if (err.message && err.message !== err.code && err.message.length > 0) {
+    return err.message;
+  }
+  return messageForCode(err.code);
+}
+
 export default function FacilityCatalog() {
   const { data, isLoading, error } = useAdminFacilityCatalog();
   const createType = useCreateCatalogType();
@@ -23,6 +42,7 @@ export default function FacilityCatalog() {
   const deleteType = useDeleteCatalogType();
 
   const [typeId, setTypeId] = useState("");
+  const [typeIdTouched, setTypeIdTouched] = useState(false);
   const [name, setName] = useState("");
   const [sport, setSport] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -41,22 +61,26 @@ export default function FacilityCatalog() {
     e.preventDefault();
     setFormError(null);
     setFormOk(null);
+    const id = slugifyTypeId(typeId);
+    if (!id || id.length < 2) {
+      setFormError(
+        "Type ID must be at least 2 characters: lowercase letters, numbers, hyphens only (e.g. basketball, turf-football).",
+      );
+      return;
+    }
     try {
       await createType.mutateAsync({
-        type_id: typeId.trim().toLowerCase(),
+        type_id: id,
         name: name.trim(),
-        sport: sport.trim().toLowerCase(),
+        sport: slugifyTypeId(sport) || id,
       });
       setTypeId("");
+      setTypeIdTouched(false);
       setName("");
       setSport("");
       setFormOk("Facility type added.");
     } catch (err) {
-      setFormError(
-        err instanceof ApiClientError
-          ? messageForCode(err.code)
-          : "Could not create facility type.",
-      );
+      setFormError(apiErrorText(err, "Could not create facility type."));
     }
   }
 
@@ -72,11 +96,7 @@ export default function FacilityCatalog() {
       });
       setEditing(null);
     } catch (err) {
-      setEditError(
-        err instanceof ApiClientError
-          ? messageForCode(err.code)
-          : "Could not update facility type.",
-      );
+      setEditError(apiErrorText(err, "Could not update facility type."));
     }
   }
 
@@ -105,30 +125,47 @@ export default function FacilityCatalog() {
           <h2 className="text-lg font-semibold text-foreground">Add type</h2>
           <form onSubmit={onCreate} className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1">
-              <label htmlFor="cat-id" className="text-sm font-medium">
-                Type ID
-              </label>
-              <Input
-                id="cat-id"
-                placeholder="e.g. squash"
-                value={typeId}
-                onChange={(e) => setTypeId(e.target.value)}
-                required
-                pattern="[a-z][a-z0-9-]*[a-z0-9]"
-                title="Lowercase letters, numbers, hyphens"
-              />
-            </div>
-            <div className="space-y-1">
               <label htmlFor="cat-name" className="text-sm font-medium">
                 Display name
               </label>
               <Input
                 id="cat-name"
-                placeholder="Squash"
+                placeholder="Basketball"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setName(v);
+                  // Auto-fill type id + sport until the user edits Type ID.
+                  if (!typeIdTouched) {
+                    const slug = slugifyTypeId(v);
+                    setTypeId(slug);
+                    setSport(slug);
+                  }
+                }}
                 required
               />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="cat-id" className="text-sm font-medium">
+                Type ID (machine id)
+              </label>
+              <Input
+                id="cat-id"
+                placeholder="e.g. basketball"
+                value={typeId}
+                onChange={(e) => {
+                  setTypeIdTouched(true);
+                  setTypeId(slugifyTypeId(e.target.value));
+                }}
+                required
+                pattern="[a-z][a-z0-9-]*[a-z0-9]"
+                title="Lowercase letters, numbers, hyphens only — no spaces"
+              />
+              <p className="text-xs text-muted-foreground">
+                Permanent id for APIs. Lowercase letters, numbers, hyphens only
+                (no spaces). Example: <code>basketball</code>,{" "}
+                <code>turf-football</code>.
+              </p>
             </div>
             <div className="space-y-1">
               <label htmlFor="cat-sport" className="text-sm font-medium">
@@ -136,9 +173,9 @@ export default function FacilityCatalog() {
               </label>
               <Input
                 id="cat-sport"
-                placeholder="squash"
+                placeholder="basketball"
                 value={sport}
-                onChange={(e) => setSport(e.target.value)}
+                onChange={(e) => setSport(slugifyTypeId(e.target.value))}
                 required
               />
             </div>
