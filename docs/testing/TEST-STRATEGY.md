@@ -1,8 +1,13 @@
 # SlotSense test strategy & environment promotion
 
-**Status:** Living document  
-**Last updated:** 2026-08-01  
+**Status:** Living runbook  
+**Governing ADR:** [ADR-0045](../adr/0045-test-strategy-and-environment-promotion.md)  
+**Last updated:** 2026-08-02  
 **Environments:** local · `slot-sense-dev-*` · `slot-sense-test-*` · prod  
+
+Normative decisions (suite names, promote gates, backlog order) live in
+**ADR-0045**. This file holds **commands, checklists, and interim
+operator procedures**.
 
 This document answers:
 

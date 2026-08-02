@@ -313,6 +313,19 @@ remaining item for formal phase close. See
   Found in DR drill Pass 1 (finding #9). Ref:
   `docs/runbooks/DRILL-pass1-report.md`,
   `docs/runbooks/disaster-recovery.md` §4.1 step 5.
+- **TEST-STRATEGY-ADR · ✓ DONE (ADR-0045, 2026-08-02)** — Accepted ADR
+  for layered suites (S-STATIC, S-REG-UNIT, S-SMOKE, S-FUNC, S-PERF,
+  …) and same-SHA progressive promotion with prod human approval.
+  Living runbook: `docs/testing/TEST-STRATEGY.md`. Implementation
+  still open per ADR-0045 D4: progressive CI, automated smoke,
+  Playwright functional, perf baselines.
+- **CI-MULTI-ENV / PROGRESSIVE-CI · OPEN (ADR-0045 D4 P0)** — Parameterize
+  deploy beyond hardcoded sport-slot-dev; promote-to-test by SHA (WIF).
+- **SMOKE-JOB · OPEN (ADR-0045 D4 P0)** — Automated S-SMOKE post-deploy
+  (health + frontend projectId; login optional).
+- **E2E-PLAYWRIGHT · OPEN (ADR-0045 D4 P1)** — S-FUNC journeys against test.
+- **PERF-BASELINE · OPEN (ADR-0045 D4 P2)** — Measure then gate concurrency
+  + latency; no aspirational thresholds.
 - **DRILL-BOOTSTRAP-SCRIPT · RESOLVED by PR-G (2026-07-25)** — Encoded
   the proven rebuild sequence (project create → billing link →
   bootstrap APIs → state bucket → `terraform init -backend-config` →

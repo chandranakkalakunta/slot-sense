@@ -128,9 +128,10 @@ setup, and known issues.
   steps for the automated installer + DNS + first admin login
 - [`docs/runbooks/provision-environment.md`](docs/runbooks/provision-environment.md)
   — one-page command card for the same procedure
+- [`docs/adr/0045-test-strategy-and-environment-promotion.md`](docs/adr/0045-test-strategy-and-environment-promotion.md)
+  — **Accepted:** layered test suites + same-SHA promote gates
 - [`docs/testing/TEST-STRATEGY.md`](docs/testing/TEST-STRATEGY.md)
-  — test suite inventory, smoke/regression/functional/performance
-  packs, running on test, and promote-to-prod model
+  — runbook for those suites (commands, checklists, interim promote)
 - [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — canonical project
   scope, reconciled to actual state through Phase 9
 - [`docs/SLOTSENSE_ARTICLE.md`](docs/SLOTSENSE_ARTICLE.md) — the
