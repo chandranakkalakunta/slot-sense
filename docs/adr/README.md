@@ -4,6 +4,24 @@ This directory contains the Architecture Decision Records (ADRs)
 for SportSlotReservation. ADRs capture the reasoning behind
 significant architectural choices.
 
+## File naming convention
+
+```text
+NNNN-short-kebab-title.md
+```
+
+Examples: `0001-tech-stack.md`, `0045-test-strategy-and-environment-promotion.md`.
+
+- **Do not** prefix filenames with `ADR-` (the document title still
+  starts with `# ADR-NNNN: …`).
+- Numbers are zero-padded to four digits.
+- Use lowercase kebab-case for the slug.
+- The in-prose reference remains “ADR-NNNN”; only the **filename**
+  follows this pattern.
+
+*(2026-08-02: ADRs 0038–0043 were renamed from `ADR-NNNN-*.md` to
+`NNNN-*.md` for consistency with 0001–0037 and 0044–0045.)*
+
 ## What Are ADRs?
 
 An Architecture Decision Record documents:
@@ -152,12 +170,12 @@ otherwise.*
 
 | ADR | Title | Status | Summary |
 |-----|-------|--------|---------|
-| [0038](ADR-0038-backup-and-disaster-recovery.md) | Backup & Disaster Recovery Strategy | Accepted | Six-layer DR runbook (Firestore, Secrets, Terraform rebuild, GCS, container images, Firebase Auth) at 4h RTO/RPO; Firestore PITR + delete protection; daily backup schedule; Terraform codification of previously-imperative SAs/IAM/Cloud Run/Redis/Artifact Registry (PR-1a, PR-1b) |
-| [0039](ADR-0039-accepted-production-hardening-residuals.md) | Accepted Production-Hardening Residuals | Accepted | CMEK, VPC+NAT for Cloud Run, admin MFA, and penetration testing deferred as a single dated accepted-residual decision (not four silent open items), with explicit revisit triggers |
-| [0040](ADR-0040-observability-and-alerting.md) | Observability & Alerting Baseline | Accepted | Two notification channels (Email + console-owned SMS), uptime checks (edge + service path), four alert policies (5xx rate, p95 latency, uptime failure, backup failure), Error Reporting, voice/agent turn-counter log-based metrics — all Terraform creates, no imports (PR-2) |
-| [0041](ADR-0041-availability-slo-redis.md) | Availability, SLO Formalization & the Redis Decision | Accepted | Cloud Run `maxScale` 2→10, TCP→HTTP startup probe, added liveness probe; 99% monthly SLO formalized at doc level (no Monitoring SLO API resources yet, gated behind `SLO-LOAD-TEST`); Redis `BASIC` tier affirmed as a documented residual with revisit triggers; "SlotSense Ops" Terraform-managed dashboard (PR-3) |
-| [0042](ADR-0042-cost-guardrails.md) | Cost Guardrails — Billing Budget & Thresholds | Accepted | One Terraform-managed, alert-only `google_billing_budget` for `sport-slot-dev`, ₹5K/mo ceiling (ADR-0005) with five graduated thresholds (50/80/100/120% actual + 100% forecasted), routed to the existing ADR-0040 channels; automated billing-disable/service-cap response explicitly rejected (PR-4) |
-| [0043](ADR-0043-security-hardening.md) | Security Hardening | Accepted | Split by blast radius: PR-5a (headers, CI scanning, registry cleanup, rotation policy), PR-5b (WIF least-privilege; Armor enforce gated on a preview-log review), PR-5c (Armor API-policy SQLi/XSS enforced with a voice-path exemption, option 2 — accepted residual `VOICE-INPUT-VALIDATION` tracked for Phase 18). Closes finding #7, the last of the ten 2026-07-13 audit findings. Binary Authorization explicitly deferred to Phase 18 |
+| [0038](0038-backup-and-disaster-recovery.md) | Backup & Disaster Recovery Strategy | Accepted | Six-layer DR runbook (Firestore, Secrets, Terraform rebuild, GCS, container images, Firebase Auth) at 4h RTO/RPO; Firestore PITR + delete protection; daily backup schedule; Terraform codification of previously-imperative SAs/IAM/Cloud Run/Redis/Artifact Registry (PR-1a, PR-1b) |
+| [0039](0039-accepted-production-hardening-residuals.md) | Accepted Production-Hardening Residuals | Accepted | CMEK, VPC+NAT for Cloud Run, admin MFA, and penetration testing deferred as a single dated accepted-residual decision (not four silent open items), with explicit revisit triggers |
+| [0040](0040-observability-and-alerting.md) | Observability & Alerting Baseline | Accepted | Two notification channels (Email + console-owned SMS), uptime checks (edge + service path), four alert policies (5xx rate, p95 latency, uptime failure, backup failure), Error Reporting, voice/agent turn-counter log-based metrics — all Terraform creates, no imports (PR-2) |
+| [0041](0041-availability-slo-redis.md) | Availability, SLO Formalization & the Redis Decision | Accepted | Cloud Run `maxScale` 2→10, TCP→HTTP startup probe, added liveness probe; 99% monthly SLO formalized at doc level (no Monitoring SLO API resources yet, gated behind `SLO-LOAD-TEST`); Redis `BASIC` tier affirmed as a documented residual with revisit triggers; "SlotSense Ops" Terraform-managed dashboard (PR-3) |
+| [0042](0042-cost-guardrails.md) | Cost Guardrails — Billing Budget & Thresholds | Accepted | One Terraform-managed, alert-only `google_billing_budget` for `sport-slot-dev`, ₹5K/mo ceiling (ADR-0005) with five graduated thresholds (50/80/100/120% actual + 100% forecasted), routed to the existing ADR-0040 channels; automated billing-disable/service-cap response explicitly rejected (PR-4) |
+| [0043](0043-security-hardening.md) | Security Hardening | Accepted | Split by blast radius: PR-5a (headers, CI scanning, registry cleanup, rotation policy), PR-5b (WIF least-privilege; Armor enforce gated on a preview-log review), PR-5c (Armor API-policy SQLi/XSS enforced with a voice-path exemption, option 2 — accepted residual `VOICE-INPUT-VALIDATION` tracked for Phase 18). Closes finding #7, the last of the ten 2026-07-13 audit findings. Binary Authorization explicitly deferred to Phase 18 |
 
 ## Reading Order
 

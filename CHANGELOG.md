@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### docs(adr): normalize ADR filenames 0038–0043 to NNNN-slug.md
+
+Phase 17 ADRs had been saved as `ADR-0038-….md` … `ADR-0043-….md` while
+0001–0037 and 0044–0045 used `NNNN-slug.md`. Renamed the six files and
+updated all markdown links; documented the convention in
+`docs/adr/README.md` and `template.md`.
+
 ### docs(adr): ADR-0045 test strategy and environment promotion
 
 Accepted ADR defining layered suites (S-STATIC, S-REG-UNIT, S-SMOKE,
@@ -441,7 +448,7 @@ no CI changes.
   applied, WIF/Armor "look before you leap" gates), and open threads
   carried into Phase 18 (`VOICE-INPUT-VALIDATION`, the timed DR
   drill/TEST-env, `CI-AUDIT-RATCHET`).
-- **`docs/adr/ADR-0042-cost-guardrails.md`** amended under D18: the
+- **`docs/adr/0042-cost-guardrails.md`** amended under D18: the
   Budget API rejected `monitoring_notification_channels` combined
   with default IAM recipients and rejected the SMS channel
   specifically (opaque 400s, isolated by removing the notification
@@ -493,7 +500,7 @@ SQLi/XSS body-inspection signatures. Coordinator decision: option 2.
   escapes agent output), not the WAF. Tracked as new backlog item
   `VOICE-INPUT-VALIDATION`, scoped to the Phase 18 launch gate — the
   durable fix for the exempt path, not attempted in this PR.
-- **`docs/adr/ADR-0043-security-hardening.md`** amended in place
+- **`docs/adr/0043-security-hardening.md`** amended in place
   (matching this project's inline-annotation convention for
   post-hoc decision outcomes, not a superseding ADR — this decision
   was already scoped as PR-5b item 1's own follow-through): the Armor

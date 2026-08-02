@@ -1,5 +1,8 @@
 # ADR-NNNN: <Short Decision Title>
 
+<!-- Filename MUST be: NNNN-short-kebab-title.md
+     (no "ADR-" prefix on the filename — see docs/adr/README.md) -->
+
 ## Status
 
 Proposed | Accepted | Superseded by ADR-NNNN | Deprecated | Rejected

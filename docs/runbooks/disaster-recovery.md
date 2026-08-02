@@ -3,7 +3,7 @@
 - **Status:** Layers 1–6 complete (PR-1a, PR-1b) — procedures below
   are complete where facts are known; drill execution and
   TODO-Coordinator items are outstanding.
-- **Governing ADR:** [ADR-0038](../adr/ADR-0038-backup-and-disaster-recovery.md)
+- **Governing ADR:** [ADR-0038](../adr/0038-backup-and-disaster-recovery.md)
 - **Last updated:** 2026-07-25
 
 ## 1. Scope, RTO/RPO, disaster classes
@@ -32,7 +32,7 @@ behavior. See ADR-0038 "Explicit non-goal — Redis."
 
 The BASIC-tier (single-node, no persistence) SPOF this implies is a
 **documented, accepted residual with revisit triggers**, not an
-unexamined risk — see [ADR-0041 D16](../adr/ADR-0041-availability-slo-redis.md#d16--redis-basic-tier-accepted-as-documented-residual)
+unexamined risk — see [ADR-0041 D16](../adr/0041-availability-slo-redis.md#d16--redis-basic-tier-accepted-as-documented-residual)
 and backlog `REDIS-HA-TRIGGERS`.
 
 ## 2. Layer 1 — Firestore

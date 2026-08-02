@@ -282,8 +282,8 @@ conflicts.
 - [docs/testing/TEST-STRATEGY.md](../testing/TEST-STRATEGY.md) — commands, checklists, interim promote  
 - [ADR-0018](0018-cicd-security-model.md) — keyless WIF  
 - [ADR-0008](0008-data-layout-and-repository-contract.md) — architecture test  
-- [ADR-0038](ADR-0038-backup-and-disaster-recovery.md) — DR drills (S-DR)  
-- [ADR-0039](ADR-0039-accepted-production-hardening-residuals.md) — security residuals  
+- [ADR-0038](0038-backup-and-disaster-recovery.md) — DR drills (S-DR)  
+- [ADR-0039](0039-accepted-production-hardening-residuals.md) — security residuals  
 - Project review 2026-07-15 — Playwright smoke E2E OPEN (P2.3)
 
 ## Related ADRs

@@ -3,9 +3,9 @@
 - **Status:** Baseline shipped (PR-2, pending Coordinator apply);
   SLO definition + ops dashboard added (PR-3, pending Coordinator
   apply); cost guardrails added (PR-4, pending Coordinator apply)
-- **Governing ADR:** [ADR-0040](../adr/ADR-0040-observability-and-alerting.md),
-  [ADR-0041](../adr/ADR-0041-availability-slo-redis.md),
-  [ADR-0042](../adr/ADR-0042-cost-guardrails.md)
+- **Governing ADR:** [ADR-0040](../adr/0040-observability-and-alerting.md),
+  [ADR-0041](../adr/0041-availability-slo-redis.md),
+  [ADR-0042](../adr/0042-cost-guardrails.md)
 - **Last updated:** 2026-07-21
 
 ## SLO definition (ADR-0041 D14)

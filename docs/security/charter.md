@@ -16,7 +16,7 @@ When principles conflict: Privacy > Fail Closed > Defense-in-Depth > Zero Creden
 
 ## Identity & Credential Model
 
-- **admin@chandraailabs.com** — sole human cloud-management identity (gcloud, GCP Console, org administration). MFA hardening is a Phase 17 accepted residual — see [ADR-0039](../adr/ADR-0039-accepted-production-hardening-residuals.md) (status corrected 2026-07-16, DOC-TRUTH; was "Phase 8").
+- **admin@chandraailabs.com** — sole human cloud-management identity (gcloud, GCP Console, org administration). MFA hardening is a Phase 17 accepted residual — see [ADR-0039](../adr/0039-accepted-production-hardening-residuals.md) (status corrected 2026-07-16, DOC-TRUTH; was "Phase 8").
 - **chandra.n@chandraailabs.com** — email and git identity (commits, correspondence). No cloud credentials.
 - **Application credentials** — never a human identity. Local development uses ADC via service account impersonation (sa-firebase-admin); CI/CD uses WIF (sa-cloud-build); runtime uses the attached service account (sa-cloud-run). A development server never holds org-admin powers.
 
@@ -28,7 +28,7 @@ When principles conflict: Privacy > Fail Closed > Defense-in-Depth > Zero Creden
 
 **Out of scope (Tier 4):** Nation-state / APT. SportSlot is residential community SaaS, not critical infrastructure.
 
-**Acceptable risks:** Google-managed encryption. CMEK, VPC + Cloud NAT for Cloud Run, and admin MFA are deferred as accepted residual risk — see [ADR-0039](../adr/ADR-0039-accepted-production-hardening-residuals.md) (status corrected 2026-07-16, DOC-TRUTH; supersedes this section's prior "Phase 8" framing). No MFA for residents in v1. No dedicated SOC (alerts + runbooks are proportionate). Up-to-1-hour stale JWT custom claims on non-sensitive endpoints (ADR-0007, Decision 3).
+**Acceptable risks:** Google-managed encryption. CMEK, VPC + Cloud NAT for Cloud Run, and admin MFA are deferred as accepted residual risk — see [ADR-0039](../adr/0039-accepted-production-hardening-residuals.md) (status corrected 2026-07-16, DOC-TRUTH; supersedes this section's prior "Phase 8" framing). No MFA for residents in v1. No dedicated SOC (alerts + runbooks are proportionate). Up-to-1-hour stale JWT custom claims on non-sensitive endpoints (ADR-0007, Decision 3).
 
 ## Security Controls by Phase
 
@@ -101,7 +101,7 @@ underway now as Phase 17 (ADR-0038, ADR-0039):
 
 - Delete protection enabled on Firestore — **Implemented** (ADR-0038, PR-1a)
 - Point-in-time recovery enabled — **Implemented** (ADR-0038, PR-1a)
-- CMEK for Firestore, Secret Manager, Cloud Storage; VPC for Cloud Run + Cloud NAT; MFA for tenant_admin/platform_admin; penetration testing — **Deferred accepted residuals**, see [ADR-0039](../adr/ADR-0039-accepted-production-hardening-residuals.md)
+- CMEK for Firestore, Secret Manager, Cloud Storage; VPC for Cloud Run + Cloud NAT; MFA for tenant_admin/platform_admin; penetration testing — **Deferred accepted residuals**, see [ADR-0039](../adr/0039-accepted-production-hardening-residuals.md)
 - Incident response runbook — not yet written (see this charter's own Incident Response section for the interim process)
 - DPDP Act compliance formalization — pending (Phase 16 DPDP self-assessment, backlog `SEC-01`)
 
