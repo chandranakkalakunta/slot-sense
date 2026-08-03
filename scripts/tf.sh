@@ -42,7 +42,7 @@ LOG_FILE="${TF_DIR}/.tf.sh.log"
 # ENV_PROJECT_ID / ENV_BUCKET / ENV_PREFIX / ENV_VARFILE. Nothing else in
 # this script needs to change. Keep ENV_NAMES in sync — it drives --list
 # and unknown-env error messages.
-ENV_NAMES="dev dev-03 test-01"
+ENV_NAMES="dev dev-03 test-01 test-03"
 
 env_lookup() {
   case "$1" in
@@ -63,6 +63,12 @@ env_lookup() {
       ENV_BUCKET="slot-sense-test-01-tfstate"
       ENV_PREFIX="terraform/state"
       ENV_VARFILE="slot-sense-test-01.tfvars"
+      ;;
+    test-03)
+      ENV_PROJECT_ID="slot-sense-test-03"
+      ENV_BUCKET="slot-sense-test-03-tfstate"
+      ENV_PREFIX="terraform/state"
+      ENV_VARFILE="slot-sense-test-03.tfvars"
       ;;
     *)
       return 1

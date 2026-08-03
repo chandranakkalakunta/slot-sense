@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### fix(frontend): inject VITE_BASE_DOMAIN on bootstrap + register test-03
+
+ADR-0046 redirects use `VITE_BASE_DOMAIN`. Bootstrap Phase 7 only injected
+Firebase VITE_* so the test SPA fell back to prod apex and skipped host↔claim
+redirects on `*.slotsense-test`. Bootstrap now bakes + fail-closes on base
+domain; CI registry points at `slot-sense-test-03`.
+
 ### feat(ci): same-SHA backend image promote (copy, no rebuild)
 
 - Registry `promote_from`: test copies API image from `sport-slot-dev` AR;
