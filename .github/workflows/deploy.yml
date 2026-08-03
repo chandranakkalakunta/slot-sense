@@ -1,12 +1,15 @@
-# Progressive deploy (ADR-0045 option A)
+# Progressive deploy (ADR-0045 option A + same-SHA image promote)
 #
 # Triggers:
-#   push main              → auto-deploy sport-slot-dev (standing dev)
-#   workflow_dispatch      → Promote to sport-slot-dev | slot-sense-test-01
-#                            with optional git_sha (defaults to selected ref)
+#   push main              → auto-deploy sport-slot-dev (standing dev): BUILD image
+#   workflow_dispatch      → sport-slot-dev | slot-sense-test-01 + optional git_sha
+#                            promote_from set → COPY image from source AR (no rebuild)
+#                            promote_from null → BUILD (dev / cold envs)
+# Frontend always rebuilt per target (VITE_FIREBASE_* + VITE_BASE_DOMAIN).
 #
 # Per-env WIF: each GCP project has its own github-actions-pool provider.
 # Registry: .github/deploy-environments.json
+# Design: docs/design/same-sha-image-promote.md
 #
 # GitHub Environments (create in repo Settings → Environments):
 #   dev  — optional protection
@@ -58,6 +61,10 @@ jobs:
       health_url: ${{ steps.map.outputs.health_url }}
       wif_provider: ${{ steps.map.outputs.wif_provider }}
       firebase_admin_sa: ${{ steps.map.outputs.firebase_admin_sa }}
+      promote_from: ${{ steps.map.outputs.promote_from }}
+      source_project_id: ${{ steps.map.outputs.source_project_id }}
+      source_artifact_repo: ${{ steps.map.outputs.source_artifact_repo }}
+      image_mode: ${{ steps.map.outputs.image_mode }}
     steps:
       - uses: actions/checkout@v4
 
@@ -93,6 +100,22 @@ jobs:
           PROJECT_NUMBER="$(echo "$ROW" | jq -r .project_number)"
           WIF="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider"
 
+          PROMOTE_FROM="$(echo "$ROW" | jq -r '.promote_from // empty')"
+          if [[ -z "${PROMOTE_FROM}" || "${PROMOTE_FROM}" == "null" ]]; then
+            IMAGE_MODE="build"
+            SOURCE_PROJECT_ID=""
+            SOURCE_ARTIFACT_REPO=""
+          else
+            SRC_ROW="$(jq -c --arg e "$PROMOTE_FROM" '.[$e] // empty' "$REG")"
+            if [[ -z "$SRC_ROW" || "$SRC_ROW" == "null" ]]; then
+              echo "promote_from=${PROMOTE_FROM} is not a key in $REG"
+              exit 1
+            fi
+            IMAGE_MODE="promote"
+            SOURCE_PROJECT_ID="$(echo "$SRC_ROW" | jq -r .project_id)"
+            SOURCE_ARTIFACT_REPO="$(echo "$SRC_ROW" | jq -r .artifact_repo)"
+          fi
+
           {
             echo "env_key=${ENV_KEY}"
             echo "git_sha=${GIT_SHA}"
@@ -109,9 +132,13 @@ jobs:
             echo "health_url=$(echo "$ROW" | jq -r .health_url)"
             echo "wif_provider=${WIF}"
             echo "firebase_admin_sa=sa-firebase-admin@${PROJECT_ID}.iam.gserviceaccount.com"
+            echo "promote_from=${PROMOTE_FROM}"
+            echo "source_project_id=${SOURCE_PROJECT_ID}"
+            echo "source_artifact_repo=${SOURCE_ARTIFACT_REPO}"
+            echo "image_mode=${IMAGE_MODE}"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Resolved env_key=${ENV_KEY} project=${PROJECT_ID} sha=${GIT_SHA}"
+          echo "Resolved env_key=${ENV_KEY} project=${PROJECT_ID} sha=${GIT_SHA} image_mode=${IMAGE_MODE}"
           echo "WIF=${WIF}"
 
   # ── Quality gates (defense in depth on main / promote) ─────────────────
@@ -189,19 +216,29 @@ jobs:
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
-      - name: Build + push backend, deploy Cloud Run
+      - name: Backend image (build or promote) + deploy Cloud Run
         env:
           CI: "true"
           BUILD_ID: ${{ needs.resolve.outputs.git_sha }}
+          IMAGE_MODE: ${{ needs.resolve.outputs.image_mode }}
+          GIT_SHA: ${{ needs.resolve.outputs.git_sha }}
           SLOTSENSE_PROJECT: ${{ needs.resolve.outputs.project_id }}
           SLOTSENSE_REGION: ${{ needs.resolve.outputs.region }}
           SLOTSENSE_ARTIFACT_REPO: ${{ needs.resolve.outputs.artifact_repo }}
           SLOTSENSE_BASE_DOMAIN: ${{ needs.resolve.outputs.base_domain }}
           SLOTSENSE_ADMIN_HOST: ${{ needs.resolve.outputs.admin_host }}
           SLOTSENSE_APP_ENVIRONMENT: ${{ needs.resolve.outputs.app_environment }}
+          SLOTSENSE_SOURCE_PROJECT: ${{ needs.resolve.outputs.source_project_id }}
+          SLOTSENSE_SOURCE_ARTIFACT_REPO: ${{ needs.resolve.outputs.source_artifact_repo }}
         run: |
           set -euo pipefail
-          ./scripts/build_push.sh
+          if [[ "${IMAGE_MODE}" == "promote" ]]; then
+            echo "image_mode=promote — copy from ${SLOTSENSE_SOURCE_PROJECT}/${SLOTSENSE_SOURCE_ARTIFACT_REPO} (no Cloud Build)"
+            ./scripts/promote_image.sh "${GIT_SHA}"
+          else
+            echo "image_mode=build — Cloud Build into ${SLOTSENSE_PROJECT}/${SLOTSENSE_ARTIFACT_REPO}"
+            ./scripts/build_push.sh
+          fi
           ./scripts/deploy_cloud_run.sh "$(cat .last_image_tag)"
 
       # Direct-WIF federated tokens are rejected by the Firebase Hosting REST

@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### feat(ci): same-SHA backend image promote (copy, no rebuild)
+
+- Registry `promote_from`: test copies API image from `sport-slot-dev` AR;
+  standing dev still **builds**. Frontend always rebuilt per env.
+- `scripts/promote_image.sh` — cross-project AR copy; fail closed if source missing.
+- Terraform `artifact_registry_reader_members` so downstream WIF can read source AR.
+- Design: `docs/design/same-sha-image-promote.md`.
+
 ### feat(dns): multi-env base domains (ADR-0046) — test first
 
 - **ADR-0046:** per-env bases (`slotsense-dev` / `slotsense-test` / `slotsense`)

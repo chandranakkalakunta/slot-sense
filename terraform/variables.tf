@@ -96,6 +96,12 @@ variable "artifact_repo_name" {
   default     = "sport-slot-repo"
 }
 
+variable "artifact_registry_reader_members" {
+  description = "Extra IAM members granted roles/artifactregistry.reader on this project's AR repo (same-SHA promote). Typically principalSet://... WIF principals of *downstream* envs that copy images from here. Standing dev lists test (and later prod) CI principals. See docs/design/same-sha-image-promote.md."
+  type        = list(string)
+  default     = []
+}
+
 variable "bootstrap_image_tag" {
   description = "Image tag Cloud Run points at on first create. CI owns the live image after (ignore_changes)."
   type        = string
