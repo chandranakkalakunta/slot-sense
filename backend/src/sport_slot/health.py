@@ -11,22 +11,34 @@ from sport_slot.ratelimit import limiter
 router = APIRouter()
 
 
+def _build_meta() -> dict[str, str]:
+    """Deploy metadata from env (no I/O). Set by scripts/deploy_cloud_run.sh."""
+    return {
+        "build_id": os.environ.get("BUILD_ID", "dev"),
+        "deployed_at": os.environ.get("DEPLOYED_AT", "unknown"),
+        "revision": os.environ.get("K_REVISION", "local"),
+    }
+
+
 @router.get("/health")
 @limiter.exempt
 async def health():
     """Liveness: process is up. No dependency calls (ADR-0006 Decision 4).
     (/healthz is reserved by GCP's frontend on Cloud Run — never reachable externally)
+
+    Also returns deploy identity so operators can confirm which build is live
+    without a separate /version call (build_id, deployed_at, K_REVISION).
     """
-    return {"status": "ok"}
+    return {"status": "ok", **_build_meta()}
 
 
 @router.get("/version")
 @limiter.exempt
 async def version():
-    """Build identifier injected at deploy time via BUILD_ID env var.
-    Falls back to 'dev' when running locally without the env var set.
+    """Build identifier injected at deploy time via BUILD_ID / DEPLOYED_AT.
+    Falls back to 'dev' / 'unknown' when running locally without the env vars.
     """
-    return {"build_id": os.environ.get("BUILD_ID", "dev")}
+    return _build_meta()
 
 
 def _firestore_ping() -> None:

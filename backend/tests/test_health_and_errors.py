@@ -3,11 +3,28 @@ from unittest.mock import patch
 import sport_slot.health as health
 
 
-async def test_health_ok(make_client):
+async def test_health_ok(make_client, monkeypatch):
+    monkeypatch.setenv("BUILD_ID", "abc123")
+    monkeypatch.setenv("DEPLOYED_AT", "2026-08-03T12:00:00Z")
+    monkeypatch.setenv("K_REVISION", "sport-slot-api-00003-test")
     async with make_client() as client:
         resp = await client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["build_id"] == "abc123"
+    assert body["deployed_at"] == "2026-08-03T12:00:00Z"
+    assert body["revision"] == "sport-slot-api-00003-test"
+
+
+async def test_version_matches_health_meta(make_client, monkeypatch):
+    monkeypatch.setenv("BUILD_ID", "deadbeef")
+    monkeypatch.setenv("DEPLOYED_AT", "2026-08-03T13:00:00Z")
+    async with make_client() as client:
+        h = (await client.get("/health")).json()
+        v = (await client.get("/version")).json()
+    assert v["build_id"] == h["build_id"] == "deadbeef"
+    assert v["deployed_at"] == h["deployed_at"] == "2026-08-03T13:00:00Z"
 
 
 async def test_readyz_ok_when_firestore_reachable(make_client):

@@ -995,9 +995,19 @@ phase5() {
   fi
 
   log "Fetching Redis AUTH string and adding as redis-auth secret version..."
-  gcloud redis instances get-auth-string sport-slot-redis --region="${REGION}" --project="${PROJECT_ID}" \
-    | gcloud secrets versions add redis-auth --project="${PROJECT_ID}" --data-file=- \
+  # Use --format=value(authString) + printf (no trailing newline). A plain
+  # `get-auth-string | versions add` can store a mismatched value so Cloud Run
+  # Redis locks fail closed with 503 LOCK_UNAVAILABLE (seen on test-03).
+  local redis_auth
+  redis_auth="$(gcloud redis instances get-auth-string sport-slot-redis \
+    --region="${REGION}" --project="${PROJECT_ID}" \
+    --format='value(authString)')" \
+    || fail 5 "reading Memorystore AUTH string failed."
+  [[ -n "${redis_auth}" ]] || fail 5 "Memorystore AUTH string empty."
+  printf '%s' "${redis_auth}" | gcloud secrets versions add redis-auth \
+    --project="${PROJECT_ID}" --data-file=- \
     || fail 5 "populating redis-auth secret failed."
+  redis_auth=""
 
   log "Adding resend-api-key secret version (value never echoed or passed as an argument)..."
   printf '%s' "${RESEND_API_KEY}" | gcloud secrets versions add resend-api-key --project="${PROJECT_ID}" --data-file=- \
