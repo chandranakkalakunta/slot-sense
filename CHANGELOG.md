@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### test(func): live S-FUNC suite for deployed env wiring (ADR-0045)
+
+Add `tests/functional/` + `scripts/run_functional.sh` — pytest against a
+real HTTPS env (Firebase ID token, tenant host, SPA scrape). Catches
+cross-env SPA config, Redis LOCK_UNAVAILABLE, Vertex disabled, horizon,
+and host isolation. Manual Playwright journeys remain for full UI pack;
+regression extraction is a follow-up.
+
 ### fix(frontend): inject VITE_BASE_DOMAIN on bootstrap + register test-03
 
 ADR-0046 redirects use `VITE_BASE_DOMAIN`. Bootstrap Phase 7 only injected

@@ -2,7 +2,7 @@
 
 **Status:** Living runbook  
 **Governing ADR:** [ADR-0045](../adr/0045-test-strategy-and-environment-promotion.md)  
-**Last updated:** 2026-08-02  
+**Last updated:** 2026-08-03  
 **Environments:** local · `slot-sense-dev-*` · `slot-sense-test-*` · prod  
 
 Normative decisions (suite names, promote gates, backlog order) live in
@@ -121,7 +121,12 @@ R2 starts as a **documented checklist** until E2E automation exists.
 | F7 | Agent text book/cancel (if Vertex enabled in env) | P1 |
 | F8 | Voice turn (if STT/TTS enabled) | P2 |
 
-**Implementation path:** Playwright against `admin-test` / tenant host (OPEN backlog). Until then: **manual functional pack** in §4.2.
+**Automated S-FUNC (live env, API + SPA scrape):** `tests/functional/`  
+Run: `./scripts/run_functional.sh` (see `tests/functional/README.md`).  
+Covers env-wiring failures (SPA `projectId` / `VITE_BASE_DOMAIN`, Redis
+`LOCK_UNAVAILABLE`, Vertex disabled, horizon, host isolation) that hermetic
+unit tests cannot see. Browser Playwright journeys F1–F5 remain backlog;
+this pack is the **first automated S-FUNC gate** for promote-to-test.
 
 ### 2.4 Performance suite
 
@@ -153,8 +158,8 @@ R2 starts as a **documented checklist** until E2E automation exists.
 | R1 backend | `cd backend && uv run pytest --cov=src --cov-fail-under=90 -q` | Yes |
 | R1 frontend | `cd frontend && pnpm test` | Yes |
 | Static | `uv run ruff check src/ tests/` · `uv run bandit -r src/` · `pnpm lint` | Yes |
-| Smoke-env | §4.1 script | No |
-| Functional | §4.2 checklist | No |
+| Smoke-env | §4.1 script + subset of `tests/functional` | Partial (deploy health) |
+| Functional | `./scripts/run_functional.sh` + §4.2 manual for provisioning | **Automated** live pack in `tests/functional/` |
 | Performance P1 | §4.3 concurrency | No |
 
 ---
@@ -187,7 +192,20 @@ gcloud storage cat "$ASSET" | grep -oE 'projectId:"[^"]+"' | head -1
 
 **Pass:** S1 green + S4 succeeds + S3 shows correct projectId.
 
-### 4.2 Functional pack (manual until Playwright)
+### 4.2 Functional pack
+
+#### Automated (S-FUNC) — run after every promote to test
+
+```bash
+cp tests/functional/.env.example tests/functional/.env.local
+# set FUNC_* credentials for a resident on the target tenant
+set -a && source tests/functional/.env.local && set +a
+./scripts/run_functional.sh
+```
+
+**Pass:** all non-skipped tests green. Skips print reason (missing creds / no bookable slot).
+
+#### Manual (provisioning journeys until Playwright)
 
 Use a private browser window. Record pass/fail in a sheet or PR comment.
 
@@ -195,9 +213,9 @@ Use a private browser window. Record pass/fail in a sheet or PR comment.
 |---|---|---|
 | F1 | Re-seed or use admin with `must_change_password` → forced change → `/admin` | ☐ |
 | F1b | `/admin/facility-catalog` → add type → edit → delete (or leave one) | ☐ |
-| F2 | Create tenant with slug e.g. `demo-test` → create tenant_admin user → copy 6-digit code | ☐ |
-| F3 | DNS A `demo-test.slotsense` → test LB if needed; tenant admin login → add facility from catalog | ☐ |
-| F4–F5 | Create resident → 6-digit → force password → book → cancel | ☐ |
+| F2 | Create tenant with slug e.g. `demo` under env base domain → tenant_admin + 6-digit code | ☐ |
+| F3 | Tenant admin login on `{slug}.{base}` → add facility from catalog | ☐ |
+| F4–F5 | Create resident → force password → book → cancel (also covered partially by automated pack) | ☐ |
 
 ### 4.3 Performance P1 (concurrency)
 

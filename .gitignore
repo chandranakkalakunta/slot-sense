@@ -68,6 +68,9 @@ frontend/dev-dist/
 .env.*.local
 *.env
 !.env.example
+# Functional suite credentials (S-FUNC)
+tests/functional/.env.local
+!tests/functional/.env.example
 
 # Terraform
 terraform/.terraform/
