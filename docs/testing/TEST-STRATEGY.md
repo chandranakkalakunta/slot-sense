@@ -260,45 +260,53 @@ uv run python ../scripts/concurrency_test.py \
 | Capability | Today | Target |
 |---|---|---|
 | CI gates on PR/main | Yes | Keep |
-| Deploy on main | **Hardcoded `sport-slot-dev`** in `deploy.yml` | Parameterize env (dev/test/prod) |
-| Promote by SHA | Partial (image tag = git SHA) | Explicit promote workflows |
-| GitHub Environments (protection rules) | Not wired for multi-env | Add `dev` / `test` / `prod` environments |
-| Test evidence required for prod | Informal | Checklist or automated smoke job |
+| Deploy on main | **Parameterized** `deploy.yml` (option A) | Keep; add prod when ready |
+| Auto-deploy standing dev | `push` → `sport-slot-dev` | Keep |
+| Promote by SHA | **`workflow_dispatch`** + env + optional `git_sha` | Keep |
+| Registry | `.github/deploy-environments.json` + firebase web configs | Extend per new env |
+| S-SMOKE after deploy | Health curl with retries | Optional login smoke later |
+| GitHub Environments | Jobs use `dev` / `test` | Required reviewers in Settings |
+| Test evidence for prod | Informal until prod exists | ADR-0045 D5 checklist |
 
-### 5.4 Operator procedure **until** multi-env CI exists
+### 5.4 Promote to **test** (primary path — GitHub Actions)
 
-1. **Merge** to `main` → wait for CI green (`c0feb60` / later SHAs).  
-2. **Note** `GIT_SHA` / image tag from Artifact Registry or `git rev-parse HEAD`.  
-3. **Deploy to test** (Coordinator):
+1. Commit is on **`main`** (WIF only allows `refs/heads/main`).  
+2. Open **Actions → Deploy → Run workflow**.  
+3. Branch: **main**.  
+4. Inputs:  
+   - **environment:** `slot-sense-test-01`  
+   - **git_sha:** full SHA to promote, or empty for current branch tip  
+5. Wait for `resolve` → `gates` → `deploy` → `smoke`.  
+6. Confirm `https://admin-test.slotsense.chandraailabs.com/health`.
 
-   ```bash
-   export SLOTSENSE_PROJECT=slot-sense-test-01
-   export SLOTSENSE_REGION=asia-south1
-   export SLOTSENSE_ARTIFACT_REPO=slot-sense-repo
-   export SLOTSENSE_BASE_DOMAIN=slotsense.chandraailabs.com
-   export SLOTSENSE_ADMIN_HOST=admin-test.slotsense.chandraailabs.com
-   # build if needed
-   make build-push   # or use existing SHA already in AR
-   make deploy-dev   # uses SLOTSENSE_* env; script name is historical
-   # frontend: build with VITE_FIREBASE_* for test project, then
-   FIREBASE_PROJECT=slot-sense-test-01 ./scripts/deploy_hosting_rest.sh
-   # + GCS sync to gs://slot-sense-test-01-frontend (same groups as CI)
-   ```
+**Once per repo:** Settings → Environments → create **`dev`** and **`test`**  
+(names must match `github_environment` in `deploy-environments.json`).
 
-4. **Run smoke §4.1** on test.  
-5. **Run functional §4.2** for release-critical paths.  
-6. **Promote to prod** only with same SHA, after recorded pass + explicit approval.  
-7. **Dev** can track `main` more loosely (auto-deploy) for continuous integration feedback.
+**Add a new env:** firebase web JSON + row in `deploy-environments.json` + workflow choice option.
 
-### 5.5 Backlog items (implementation follow-ups)
+### 5.5 Manual deploy fallback (if Actions unavailable)
+
+```bash
+export SLOTSENSE_PROJECT=slot-sense-test-01
+export SLOTSENSE_REGION=asia-south1
+export SLOTSENSE_ARTIFACT_REPO=slot-sense-repo
+export SLOTSENSE_BASE_DOMAIN=slotsense.chandraailabs.com
+export SLOTSENSE_ADMIN_HOST=admin-test.slotsense.chandraailabs.com
+export CI=true
+./scripts/build_push.sh
+./scripts/deploy_cloud_run.sh "$(cat .last_image_tag)"
+# frontend: VITE_* from infrastructure/firebase-web-configs/slot-sense-test-01.json
+# + deploy_hosting_rest + GCS sync (same as workflow)
+```
+
+### 5.6 Remaining backlog
 
 | ID | Work |
 |---|---|
-| CI-MULTI-ENV | Parameterize `deploy.yml` by environment (project, WIF, buckets) |
-| PROMOTE-WORKFLOW | `workflow_dispatch` promote jobs with SHA input + GitHub Environment protection |
-| SMOKE-JOB | Post-deploy smoke job (`curl` health + projectId check) |
+| GH-ENVIRONMENTS-PROTECTION | Required reviewers on `test` / `prod` Environments |
+| PROD-REGISTRY-ROW | Add prod project to `deploy-environments.json` when live |
 | E2E-PLAYWRIGHT | Automate F1–F5 against test |
-| PERF-BASELINE | Capture concurrency + p95 baselines; store pass thresholds |
+| PERF-BASELINE | Concurrency + p95 baselines then gate |
 
 ---
 
