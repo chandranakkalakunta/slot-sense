@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### feat(ci): progressive multi-env deploy (option A) + S-SMOKE health
+
+- **`deploy.yml`:** `push` main → `sport-slot-dev`; `workflow_dispatch`
+  with `environment` + optional `git_sha` for promote (test supported).
+- **`.github/deploy-environments.json`:** per-env project, WIF project
+  number, AR repo, admin host, Firebase config path, health URL.
+- **Firebase web configs** committed under
+  `infrastructure/firebase-web-configs/` for CI frontend builds.
+- Frontend build injects `VITE_FIREBASE_*` and fails if wrong `projectId`.
+- Post-deploy **smoke** job curls env health URL with retries.
+- GitHub `environment:` maps to `dev` / `test` for future protection rules.
+
 ### docs(adr): normalize ADR filenames 0038–0043 to NNNN-slug.md
 
 Phase 17 ADRs had been saved as `ADR-0038-….md` … `ADR-0043-….md` while

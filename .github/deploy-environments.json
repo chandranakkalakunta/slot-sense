@@ -1,0 +1,28 @@
+{
+  "sport-slot-dev": {
+    "github_environment": "dev",
+    "project_id": "sport-slot-dev",
+    "project_number": "707808711911",
+    "region": "asia-south1",
+    "artifact_repo": "sport-slot-repo",
+    "base_domain": "slotsense.chandraailabs.com",
+    "admin_host": "admin.slotsense.chandraailabs.com",
+    "app_environment": "development",
+    "frontend_bucket": "sport-slot-dev-frontend",
+    "firebase_config": "infrastructure/firebase-web-configs/sport-slot-dev.json",
+    "health_url": "https://admin.slotsense.chandraailabs.com/health"
+  },
+  "slot-sense-test-01": {
+    "github_environment": "test",
+    "project_id": "slot-sense-test-01",
+    "project_number": "543027201830",
+    "region": "asia-south1",
+    "artifact_repo": "slot-sense-repo",
+    "base_domain": "slotsense.chandraailabs.com",
+    "admin_host": "admin-test.slotsense.chandraailabs.com",
+    "app_environment": "test",
+    "frontend_bucket": "slot-sense-test-01-frontend",
+    "firebase_config": "infrastructure/firebase-web-configs/slot-sense-test-01.json",
+    "health_url": "https://admin-test.slotsense.chandraailabs.com/health"
+  }
+}

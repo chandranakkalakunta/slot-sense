@@ -1,28 +1,131 @@
-name: Deploy (main)
+# Progressive deploy (ADR-0045 option A)
+#
+# Triggers:
+#   push main              → auto-deploy sport-slot-dev (standing dev)
+#   workflow_dispatch      → Promote to sport-slot-dev | slot-sense-test-01
+#                            with optional git_sha (defaults to selected ref)
+#
+# Per-env WIF: each GCP project has its own github-actions-pool provider.
+# Registry: .github/deploy-environments.json
+#
+# GitHub Environments (create in repo Settings → Environments):
+#   dev  — optional protection
+#   test — optional reviewers
+#   prod — required reviewers (when prod is added to the registry)
+
+name: Deploy
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target GCP environment (see .github/deploy-environments.json)
+        required: true
+        type: choice
+        options:
+          - sport-slot-dev
+          - slot-sense-test-01
+      git_sha:
+        description: Git SHA to deploy (empty = commit that triggered this run)
+        required: false
+        type: string
+        default: ""
 
 # id-token:write is REQUIRED for the OIDC token used by WIF auth.
 permissions:
   contents: read
   id-token: write
 
-env:
-  PROJECT_ID: sport-slot-dev
-  REGION: asia-south1
-  WIF_PROVIDER: projects/707808711911/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
-
 jobs:
-  # Gates run again on main — defense in depth: even a direct push
-  # to main (if branch protection were bypassed) cannot deploy broken code.
+  # ── Resolve target env + SHA ───────────────────────────────────────────
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      env_key: ${{ steps.map.outputs.env_key }}
+      git_sha: ${{ steps.map.outputs.git_sha }}
+      github_environment: ${{ steps.map.outputs.github_environment }}
+      project_id: ${{ steps.map.outputs.project_id }}
+      project_number: ${{ steps.map.outputs.project_number }}
+      region: ${{ steps.map.outputs.region }}
+      artifact_repo: ${{ steps.map.outputs.artifact_repo }}
+      base_domain: ${{ steps.map.outputs.base_domain }}
+      admin_host: ${{ steps.map.outputs.admin_host }}
+      app_environment: ${{ steps.map.outputs.app_environment }}
+      frontend_bucket: ${{ steps.map.outputs.frontend_bucket }}
+      firebase_config: ${{ steps.map.outputs.firebase_config }}
+      health_url: ${{ steps.map.outputs.health_url }}
+      wif_provider: ${{ steps.map.outputs.wif_provider }}
+      firebase_admin_sa: ${{ steps.map.outputs.firebase_admin_sa }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: map
+        name: Map environment from registry
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV_KEY="${{ inputs.environment }}"
+            SHA_INPUT="${{ inputs.git_sha }}"
+          else
+            # push to main → standing dev only (progressive CI option A)
+            ENV_KEY="sport-slot-dev"
+            SHA_INPUT=""
+          fi
+
+          if [[ -n "${SHA_INPUT}" ]]; then
+            GIT_SHA="${SHA_INPUT}"
+          else
+            GIT_SHA="${{ github.sha }}"
+          fi
+
+          REG=".github/deploy-environments.json"
+          test -f "$REG" || { echo "Missing $REG"; exit 1; }
+          ROW="$(jq -c --arg e "$ENV_KEY" '.[$e] // empty' "$REG")"
+          if [[ -z "$ROW" || "$ROW" == "null" ]]; then
+            echo "Unknown environment key: $ENV_KEY"
+            echo "Known keys: $(jq -r 'keys|join(", ")' "$REG")"
+            exit 1
+          fi
+
+          PROJECT_ID="$(echo "$ROW" | jq -r .project_id)"
+          PROJECT_NUMBER="$(echo "$ROW" | jq -r .project_number)"
+          WIF="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider"
+
+          {
+            echo "env_key=${ENV_KEY}"
+            echo "git_sha=${GIT_SHA}"
+            echo "github_environment=$(echo "$ROW" | jq -r .github_environment)"
+            echo "project_id=${PROJECT_ID}"
+            echo "project_number=${PROJECT_NUMBER}"
+            echo "region=$(echo "$ROW" | jq -r .region)"
+            echo "artifact_repo=$(echo "$ROW" | jq -r .artifact_repo)"
+            echo "base_domain=$(echo "$ROW" | jq -r .base_domain)"
+            echo "admin_host=$(echo "$ROW" | jq -r .admin_host)"
+            echo "app_environment=$(echo "$ROW" | jq -r .app_environment)"
+            echo "frontend_bucket=$(echo "$ROW" | jq -r .frontend_bucket)"
+            echo "firebase_config=$(echo "$ROW" | jq -r .firebase_config)"
+            echo "health_url=$(echo "$ROW" | jq -r .health_url)"
+            echo "wif_provider=${WIF}"
+            echo "firebase_admin_sa=sa-firebase-admin@${PROJECT_ID}.iam.gserviceaccount.com"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved env_key=${ENV_KEY} project=${PROJECT_ID} sha=${GIT_SHA}"
+          echo "WIF=${WIF}"
+
+  # ── Quality gates (defense in depth on main / promote) ─────────────────
   gates:
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.git_sha }}
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+
       - name: Backend gates
         working-directory: backend
         run: |
@@ -31,36 +134,48 @@ jobs:
           uv run ruff check src/ tests/
           uv run bandit -r src/
           uv run pytest --cov=src --cov-fail-under=90 -q
+
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
           package_json_file: frontend/package.json
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
+
       - name: Frontend gates
         working-directory: frontend
         run: |
           pnpm install --frozen-lockfile
           pnpm lint && pnpm test && pnpm build
 
+  # ── Deploy to selected GCP project ─────────────────────────────────────
   deploy:
-    needs: gates
+    needs: [resolve, gates]
     runs-on: ubuntu-latest
+    # GitHub Environment for approvals/secrets (create dev/test in repo Settings)
+    environment: ${{ needs.resolve.outputs.github_environment }}
+    outputs:
+      health_url: ${{ needs.resolve.outputs.health_url }}
+      project_id: ${{ needs.resolve.outputs.project_id }}
+      git_sha: ${{ needs.resolve.outputs.git_sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.git_sha }}
 
       - name: Authenticate to Google Cloud (WIF, keyless)
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          workload_identity_provider: ${{ needs.resolve.outputs.wif_provider }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Set up Node (for frontend build)
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -77,81 +192,124 @@ jobs:
       - name: Build + push backend, deploy Cloud Run
         env:
           CI: "true"
-          BUILD_ID: ${{ github.sha }}
-          # scripts/build_push.sh no longer defaults these (PR-I safety fix).
-          # deploy.yml explicitly passes what CI targets today. Full per-env
-          # parameterization tracked separately in backlog.
-          SLOTSENSE_PROJECT: sport-slot-dev
-          SLOTSENSE_REGION: asia-south1
-          SLOTSENSE_ARTIFACT_REPO: sport-slot-repo
+          BUILD_ID: ${{ needs.resolve.outputs.git_sha }}
+          SLOTSENSE_PROJECT: ${{ needs.resolve.outputs.project_id }}
+          SLOTSENSE_REGION: ${{ needs.resolve.outputs.region }}
+          SLOTSENSE_ARTIFACT_REPO: ${{ needs.resolve.outputs.artifact_repo }}
+          SLOTSENSE_BASE_DOMAIN: ${{ needs.resolve.outputs.base_domain }}
+          SLOTSENSE_ADMIN_HOST: ${{ needs.resolve.outputs.admin_host }}
+          SLOTSENSE_APP_ENVIRONMENT: ${{ needs.resolve.outputs.app_environment }}
         run: |
-          make build-push
-          make deploy-dev
+          set -euo pipefail
+          ./scripts/build_push.sh
+          ./scripts/deploy_cloud_run.sh "$(cat .last_image_tag)"
 
       # Direct-WIF federated tokens are rejected by the Firebase Hosting REST
-      # API (401 UNAUTHENTICATED). Mint a real OAuth2 access token by
-      # impersonating sa-firebase-admin (which has Firebase perms). The main
-      # auth step above stays direct-WIF for gcloud build/run commands.
+      # API (401). Mint a real OAuth2 access token by impersonating
+      # sa-firebase-admin (project-scoped).
       - name: Mint Firebase access token (SA impersonation)
         id: fb_auth
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: sa-firebase-admin@sport-slot-dev.iam.gserviceaccount.com
+          workload_identity_provider: ${{ needs.resolve.outputs.wif_provider }}
+          service_account: ${{ needs.resolve.outputs.firebase_admin_sa }}
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/cloud-platform
 
-      - name: Deploy Firebase Hosting (REST API, SA-impersonated token)
+      - name: Build frontend with env Firebase config + deploy Hosting
         env:
           FIREBASE_ACCESS_TOKEN: ${{ steps.fb_auth.outputs.access_token }}
-          FIREBASE_PROJECT: sport-slot-dev
+          FIREBASE_PROJECT: ${{ needs.resolve.outputs.project_id }}
+          FB_CFG: ${{ needs.resolve.outputs.firebase_config }}
         run: |
+          set -euo pipefail
+          test -f "$FB_CFG" || { echo "Missing Firebase config: $FB_CFG"; exit 1; }
+          export VITE_FIREBASE_API_KEY="$(jq -r .apiKey "$FB_CFG")"
+          export VITE_FIREBASE_AUTH_DOMAIN="$(jq -r .authDomain "$FB_CFG")"
+          export VITE_FIREBASE_PROJECT_ID="$(jq -r .projectId "$FB_CFG")"
+          export VITE_FIREBASE_STORAGE_BUCKET="$(jq -r .storageBucket "$FB_CFG")"
+          export VITE_FIREBASE_MESSAGING_SENDER_ID="$(jq -r .messagingSenderId "$FB_CFG")"
+          export VITE_FIREBASE_APP_ID="$(jq -r .appId "$FB_CFG")"
+
           (cd frontend && pnpm build)
+
+          # Fail closed if SPA still points at the wrong Firebase project
+          JS="$(ls frontend/dist/assets/index-*.js | head -1)"
+          if ! grep -q "projectId:\"${FIREBASE_PROJECT}\"" "$JS"; then
+            echo "FATAL: frontend dist does not embed projectId:\"${FIREBASE_PROJECT}\""
+            grep -oE 'projectId:"[^"]+"' "$JS" | sort -u || true
+            exit 1
+          fi
+          if [[ "${FIREBASE_PROJECT}" != "sport-slot-dev" ]] && grep -q 'projectId:"sport-slot-dev"' "$JS"; then
+            echo "FATAL: frontend still embeds sport-slot-dev"
+            exit 1
+          fi
+
           ./scripts/deploy_hosting_rest.sh
 
-      # Step 7 (SA impersonation) overwrote ADC to sa-firebase-admin, which has no
-      # GCS write permission. Re-authenticate as the direct WIF principal (identical
-      # config to the workflow's first auth step) to restore storage.admin access.
-      - name: Re-authenticate to Google Cloud (WIF, keyless — GCS sync)
+      # Impersonation overwrote ADC; re-auth as WIF principal for GCS.
+      - name: Re-authenticate to Google Cloud (WIF — GCS sync)
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          workload_identity_provider: ${{ needs.resolve.outputs.wif_provider }}
 
-      # Sync frontend/dist/ to GCS with per-file Cache-Control headers matching
-      # firebase.json's existing pattern. dist/ was built in the previous step.
-      # Groups:
-      #   no-cache   — root named files (index.html, SW, manifest, workbox)
-      #   immutable  — content-hashed /assets/** (old hashes kept, not deleted,
-      #                so users with a cached index.html can still fetch them)
-      #   1-day      — PWA icon PNGs (fixed filenames, not hash-versioned)
-      #   excluded   — slotsense-icon-source.png (raw source artifact)
-      - name: Sync frontend dist to GCS (sport-slot-dev-frontend)
+      - name: Sync frontend dist to GCS
+        env:
+          BUCKET: gs://${{ needs.resolve.outputs.frontend_bucket }}
         run: |
-          BUCKET=gs://sport-slot-dev-frontend
-
-          # Group 1: no-cache — named root files (change every deploy)
+          set -euo pipefail
+          DIST=frontend/dist
           gcloud storage cp \
-            frontend/dist/index.html \
-            frontend/dist/manifest.webmanifest \
-            frontend/dist/sw.js \
-            frontend/dist/registerSW.js \
+            "${DIST}/index.html" \
+            "${DIST}/manifest.webmanifest" \
+            "${DIST}/sw.js" \
+            "${DIST}/registerSW.js" \
             "${BUCKET}/" \
             --cache-control="no-cache"
-          # workbox filename carries a content hash but matches /workbox-*.js →
-          # no-cache in firebase.json; shell expands the glob at runtime
-          gcloud storage cp frontend/dist/workbox-*.js "${BUCKET}/" \
+          gcloud storage cp "${DIST}"/workbox-*.js "${BUCKET}/" \
             --cache-control="no-cache"
-
-          # Group 2: immutable — content-hashed assets (JS, CSS, fonts)
           gcloud storage cp --cache-control="public, max-age=31536000, immutable" \
-            frontend/dist/assets/* "${BUCKET}/assets/"
-
-          # Group 3: 1-day cache — PWA icon PNGs (fixed filenames, not hash-versioned)
+            "${DIST}"/assets/* "${BUCKET}/assets/"
           gcloud storage cp \
-            frontend/dist/favicon-32x32.png \
-            frontend/dist/pwa-192x192.png \
-            frontend/dist/pwa-512x512.png \
-            frontend/dist/pwa-maskable-512x512.png \
+            "${DIST}/favicon-32x32.png" \
+            "${DIST}/pwa-192x192.png" \
+            "${DIST}/pwa-512x512.png" \
+            "${DIST}/pwa-maskable-512x512.png" \
             "${BUCKET}/" \
             --cache-control="public, max-age=86400"
-          # slotsense-icon-source.png deliberately excluded (raw source artifact)
+
+  # ── S-SMOKE (ADR-0045 D2) ──────────────────────────────────────────────
+  smoke:
+    needs: [resolve, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check
+        env:
+          HEALTH_URL: ${{ needs.resolve.outputs.health_url }}
+        run: |
+          set -euo pipefail
+          echo "GET ${HEALTH_URL}"
+          # Cert/DNS edge cases: retry briefly after deploy
+          for i in 1 2 3 4 5; do
+            if curl -sfS --max-time 20 "${HEALTH_URL}"; then
+              echo
+              echo "S-SMOKE health: PASS"
+              exit 0
+            fi
+            echo "attempt ${i} failed; sleep 15s"
+            sleep 15
+          done
+          echo "S-SMOKE health: FAIL"
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Deploy summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Environment | \`${{ needs.resolve.outputs.env_key }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Project | \`${{ needs.resolve.outputs.project_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Git SHA | \`${{ needs.resolve.outputs.git_sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Health URL | ${{ needs.resolve.outputs.health_url }} |" >> "$GITHUB_STEP_SUMMARY"

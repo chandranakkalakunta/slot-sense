@@ -319,10 +319,17 @@ remaining item for formal phase close. See
   Living runbook: `docs/testing/TEST-STRATEGY.md`. Implementation
   still open per ADR-0045 D4: progressive CI, automated smoke,
   Playwright functional, perf baselines.
-- **CI-MULTI-ENV / PROGRESSIVE-CI · OPEN (ADR-0045 D4 P0)** — Parameterize
-  deploy beyond hardcoded sport-slot-dev; promote-to-test by SHA (WIF).
-- **SMOKE-JOB · OPEN (ADR-0045 D4 P0)** — Automated S-SMOKE post-deploy
-  (health + frontend projectId; login optional).
+- **CI-MULTI-ENV / PROGRESSIVE-CI · ✓ DONE (2026-08)** — Option A:
+  `deploy.yml` push→sport-slot-dev; `workflow_dispatch` promote with
+  env + optional `git_sha`; per-env WIF from
+  `.github/deploy-environments.json`; Firebase web configs committed.
+  Prod env still to be added when project exists.
+- **SMOKE-JOB · PARTIAL (2026-08)** — Post-deploy health curl with
+  retries in `deploy.yml` smoke job. Login smoke / projectId check in
+  CI still optional enhancements.
+- **GH-ENVIRONMENTS-PROTECTION · OPEN** — Create GitHub Environments
+  `dev`/`test`/`prod` with required reviewers on prod (and optionally
+  test). Workflow already sets `environment:` from the registry.
 - **E2E-PLAYWRIGHT · OPEN (ADR-0045 D4 P1)** — S-FUNC journeys against test.
 - **PERF-BASELINE · OPEN (ADR-0045 D4 P2)** — Measure then gate concurrency
   + latency; no aspirational thresholds.

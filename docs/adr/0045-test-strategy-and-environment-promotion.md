@@ -186,16 +186,16 @@ Work is ordered so each step unblocks the next:
 
 | Priority | Work item | Closes |
 |---|---|---|
-| **P0** | Multi-env / progressive CI: parameterize deploy; promote-to-test by SHA (WIF, no keys) | D3 path to test |
-| **P0** | Automated S-SMOKE job post-deploy (at least health + projectId) | D2 smoke |
-| **P1** | GitHub Environments `test` / `prod` + required reviewers on prod | D3 approval |
+| **P0** | Multi-env / progressive CI: parameterize deploy; promote-to-test by SHA (WIF, no keys) | D3 path to test — **DONE 2026-08** (`deploy.yml` option A + `deploy-environments.json`) |
+| **P0** | Automated S-SMOKE job post-deploy (at least health + projectId) | D2 smoke — **PARTIAL** (health curl); projectId checked in deploy job pre-GCS |
+| **P1** | GitHub Environments `test` / `prod` + required reviewers on prod | D3 approval — workflow ready; Coordinator enables protection in repo Settings |
 | **P1** | Playwright (or equivalent) S-FUNC against test for journeys D2 | D2 functional |
 | **P2** | S-PERF baselines measured then gated; concurrency in promote path | D2 perf |
 | **P2** | S-SEC extended (dependency audit gate); contract tests if OpenAPI published | D1 extended |
 | **P3** | Nightly S-FUNC on test; S-DR drill cadence (already ADR-0038) | Hardening |
 
-Until P0 lands, the **manual** promote procedure in
-`docs/testing/TEST-STRATEGY.md` §5.4 is the compliant interim.
+Primary promote path: Actions → **Deploy** → Run workflow (see
+`docs/testing/TEST-STRATEGY.md` §5.4). Manual gcloud fallback remains §5.5.
 
 ### D5 — Evidence for a production promote
 
