@@ -3,6 +3,10 @@
 # Same tag on both sides (short git SHA). Fail closed if source is missing —
 # never rebuild here (ADR-0045 same-artifact promote; docs/design/same-sha-image-promote.md).
 #
+# Copy method: docker pull/tag/push (works on GitHub-hosted runners). Avoids
+# `gcloud artifacts docker images copy`, which is not available on all gcloud
+# SDK versions used in CI.
+#
 # Required env:
 #   SLOTSENSE_PROJECT              destination GCP project
 #   SLOTSENSE_REGION               region for both ARs (same region today)
@@ -27,6 +31,7 @@ DEST_REPO="${SLOTSENSE_ARTIFACT_REPO}"
 SRC_PROJECT="${SLOTSENSE_SOURCE_PROJECT}"
 SRC_REPO="${SLOTSENSE_SOURCE_ARTIFACT_REPO}"
 SERVICE="sport-slot-api"
+REGISTRY_HOST="${REGION}-docker.pkg.dev"
 
 cd "$(dirname "$0")/.."
 
@@ -47,8 +52,8 @@ else
   TAG="${RAW_TAG}"
 fi
 
-SRC_IMAGE="${REGION}-docker.pkg.dev/${SRC_PROJECT}/${SRC_REPO}/${SERVICE}:${TAG}"
-DEST_IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${DEST_REPO}/${SERVICE}:${TAG}"
+SRC_IMAGE="${REGISTRY_HOST}/${SRC_PROJECT}/${SRC_REPO}/${SERVICE}:${TAG}"
+DEST_IMAGE="${REGISTRY_HOST}/${PROJECT}/${DEST_REPO}/${SERVICE}:${TAG}"
 
 echo "Promote (copy, no rebuild):"
 echo "  source: ${SRC_IMAGE}"
@@ -63,8 +68,10 @@ fi
 
 # Cross-project copy. Caller must have AR reader on source + writer on dest
 # (see docs/design/same-sha-image-promote.md IAM section).
-gcloud artifacts docker images copy "${SRC_IMAGE}" "${DEST_IMAGE}" \
-  --quiet
+gcloud auth configure-docker "${REGISTRY_HOST}" --quiet
+docker pull "${SRC_IMAGE}"
+docker tag "${SRC_IMAGE}" "${DEST_IMAGE}"
+docker push "${DEST_IMAGE}"
 
 echo "Copied: ${DEST_IMAGE}"
 echo "${TAG}" > .last_image_tag
