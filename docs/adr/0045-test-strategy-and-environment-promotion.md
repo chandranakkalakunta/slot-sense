@@ -189,7 +189,8 @@ Work is ordered so each step unblocks the next:
 | **P0** | Multi-env / progressive CI: parameterize deploy; promote-to-test by SHA (WIF, no keys) | D3 path to test — **DONE 2026-08** (`deploy.yml` option A + `deploy-environments.json`) |
 | **P0** | Automated S-SMOKE job post-deploy (at least health + projectId) | D2 smoke — **PARTIAL** (health curl); projectId checked in deploy job pre-GCS |
 | **P1** | GitHub Environments `test` / `prod` + required reviewers on prod | D3 approval — workflow ready; Coordinator enables protection in repo Settings |
-| **P1** | Playwright (or equivalent) S-FUNC against test for journeys D2 | D2 functional |
+| **P1** | Live S-FUNC API/SPA pack against test (`tests/functional/`) | D2 functional env-wiring — **DONE 2026-08** |
+| **P1** | Playwright (or equivalent) S-FUNC UI journeys D2 F1–F5 | D2 functional browser |
 | **P2** | S-PERF baselines measured then gated; concurrency in promote path | D2 perf |
 | **P2** | S-SEC extended (dependency audit gate); contract tests if OpenAPI published | D1 extended |
 | **P3** | Nightly S-FUNC on test; S-DR drill cadence (already ADR-0038) | Hardening |
