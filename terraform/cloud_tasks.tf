@@ -79,3 +79,14 @@ resource "google_secret_manager_secret_iam_member" "cloud_run_resend_secret_acce
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.cloud_run.email}"
 }
+
+# Redis AUTH secret — same pattern as resend. Project-level secretAccessor
+# alone can race Cloud Run create on greenfield apply (IAM not yet visible
+# to the Run control plane → SECRETS_ACCESS_CHECK_FAILED → service tainted).
+# Secret-level binding + depends_on on the service closes that race.
+resource "google_secret_manager_secret_iam_member" "cloud_run_redis_secret_accessor" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.redis_auth.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}

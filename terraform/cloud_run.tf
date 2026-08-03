@@ -182,6 +182,18 @@ resource "google_cloud_run_v2_service" "sport_slot_api" {
     percent = 100
   }
 
+  # Greenfield bootstrap race: Cloud Run revision validation checks secret
+  # access before project-level IAM has propagated if created in parallel.
+  # Force IAM (and secret resources) first so create does not fail and taint
+  # the service (prevent_destroy then blocks replace on retry).
+  depends_on = [
+    google_project_iam_member.cloud_run_secretmanager_secret_accessor,
+    google_secret_manager_secret_iam_member.cloud_run_resend_secret_accessor,
+    google_secret_manager_secret_iam_member.cloud_run_redis_secret_accessor,
+    google_secret_manager_secret.redis_auth,
+    google_secret_manager_secret.resend_api_key,
+  ]
+
   lifecycle {
     prevent_destroy = true
     ignore_changes = [
