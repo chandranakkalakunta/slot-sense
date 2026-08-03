@@ -1,0 +1,16 @@
+# Gitleaks config for SlotSense.
+# Firebase Web API keys (AIza…) in infrastructure/firebase-web-configs/ are
+# public SPA client identifiers (same class as frontend/.env.production),
+# not secret credentials. They are committed so CI can build per-env frontends.
+# See infrastructure/firebase-web-configs/README.md.
+
+title = "slot-sense"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public Firebase web SDK configs for multi-env CI builds"
+paths = [
+  '''infrastructure/firebase-web-configs/.*\.json$''',
+]

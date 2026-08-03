@@ -371,7 +371,10 @@ build_frontend_for_project() {
   [[ "${project_id}" == "${PROJECT_ID}" ]] \
     || { log "Config projectId '${project_id}' != target '${PROJECT_ID}'"; return 1; }
 
-  log "Building frontend with VITE_FIREBASE_PROJECT_ID=${project_id}..."
+  # ADR-0046: host↔claim redirects and tenantSlugFromHost use VITE_BASE_DOMAIN.
+  # Without it the SPA falls back to prod apex; admin.slotsense-test… is treated
+  # as an unknown host (slug=null) and tenant redirect is skipped entirely.
+  log "Building frontend with VITE_FIREBASE_PROJECT_ID=${project_id} VITE_BASE_DOMAIN=${BASE_DOMAIN}..."
   (
     cd "${REPO_ROOT}/frontend"
     pnpm install --frozen-lockfile
@@ -381,6 +384,7 @@ build_frontend_for_project() {
     VITE_FIREBASE_STORAGE_BUCKET="${storage_bucket}" \
     VITE_FIREBASE_MESSAGING_SENDER_ID="${messaging_sender_id}" \
     VITE_FIREBASE_APP_ID="${app_id}" \
+    VITE_BASE_DOMAIN="${BASE_DOMAIN}" \
     pnpm build
   ) || return 1
 
@@ -395,7 +399,11 @@ build_frontend_for_project() {
     log "FATAL: built frontend still embeds sport-slot-dev Firebase config"
     return 1
   fi
-  log "Frontend build verified: embeds projectId:\"${PROJECT_ID}\""
+  if ! grep -qF "${BASE_DOMAIN}" "${dist_js}"; then
+    log "FATAL: built frontend does not embed VITE_BASE_DOMAIN=${BASE_DOMAIN} (file: ${dist_js})"
+    return 1
+  fi
+  log "Frontend build verified: embeds projectId:\"${PROJECT_ID}\" and base domain ${BASE_DOMAIN}"
 }
 
 sync_frontend_to_gcs() {

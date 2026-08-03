@@ -29,7 +29,7 @@ on:
         type: choice
         options:
           - sport-slot-dev
-          - slot-sense-test-01
+          - slot-sense-test-03
       git_sha:
         description: Git SHA to deploy (empty = commit that triggered this run)
         required: false
