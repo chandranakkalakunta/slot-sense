@@ -40,6 +40,9 @@ locals {
   ]
 
   # Operational services APIs (enabled Phase 1.3.1 Batch 2)
+  # aiplatform: booking assistant (Vertex / Gemini). Missing from early list
+  # caused test-03 agent to return SAFE_FALLBACK after 403 SERVICE_DISABLED.
+  # speech: voice assistant STT (sa-cloud-run has roles/speech.client).
   operational_apis = [
     "artifactregistry.googleapis.com",
     "monitoring.googleapis.com",
@@ -50,6 +53,8 @@ locals {
     "redis.googleapis.com",
     "pubsub.googleapis.com",
     "storage.googleapis.com",
+    "aiplatform.googleapis.com",
+    "speech.googleapis.com",
   ]
 
   all_apis = concat(local.core_apis, local.operational_apis)
