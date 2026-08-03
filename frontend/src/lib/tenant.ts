@@ -1,16 +1,17 @@
-const BASE_DOMAIN = "slotsense.chandraailabs.com";
 const DEV_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
-/** Tenant slug from the hostname.
- *  - Real subdomain {slug}.slotsense.chandraailabs.com → that slug
- *    (production; the authoritative host-based path).
- *  - localhost / 127.0.0.1 → VITE_DEV_TENANT_SLUG (local dev).
- *  - Any other host (e.g. *.web.app, the single-tenant DEV
- *    surface) → VITE_DEFAULT_TENANT_SLUG if set, else null.
- *  On a real custom domain (Phase 7) the subdomain branch wins and
- *  the default is irrelevant. */
+function baseDomain(): string {
+  return import.meta.env.VITE_BASE_DOMAIN || "slotsense.chandraailabs.com";
+}
+
+/** Tenant slug from the hostname (ADR-0046 per-env base domain).
+ *  - {slug}.{VITE_BASE_DOMAIN} → that slug
+ *  - localhost / 127.0.0.1 → VITE_DEV_TENANT_SLUG
+ *  - other hosts → VITE_DEFAULT_TENANT_SLUG if set */
 export function tenantSlugFromHost(host = window.location.hostname): string | null {
-  const suffix = "." + BASE_DOMAIN;
+  const apex = baseDomain();
+  if (host === apex) return null;
+  const suffix = "." + apex;
   if (host.endsWith(suffix)) {
     return host.slice(0, -suffix.length);
   }

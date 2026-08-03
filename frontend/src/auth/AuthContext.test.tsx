@@ -24,6 +24,14 @@ describe("slugFromHost", () => {
     expect(slugFromHost("ddsociety.slotsense.chandraailabs.com")).toBe("ddsociety");
   });
 
+  it("ADR-0046: parses slug under a non-prod base domain when apex is passed", () => {
+    const testApex = "slotsense-test.chandraailabs.com";
+    expect(slugFromHost("slotsense-test.chandraailabs.com", testApex)).toBe("");
+    expect(slugFromHost("rvrg.slotsense-test.chandraailabs.com", testApex)).toBe("rvrg");
+    // Must not treat parent zone as this env's apex
+    expect(slugFromHost("rvrg.slotsense.chandraailabs.com", testApex)).toBeNull();
+  });
+
   it("returns null for localhost (dev-safety)", () => {
     expect(slugFromHost("localhost")).toBeNull();
   });

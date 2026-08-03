@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### feat(dns): multi-env base domains (ADR-0046) — test first
+
+- **ADR-0046:** per-env bases (`slotsense-dev` / `slotsense-test` / `slotsense`)
+  with one wildcard A + Certificate Manager cert per project; retires Pattern B
+  (`admin-test` / `rvrg-test` under shared `*.slotsense`).
+- **Terraform:** cert DNS auth, certificate domains, URL map hosts, and edge
+  uptime probe host derived from `var.base_domain`.
+- **Frontend:** `VITE_BASE_DOMAIN` drives host→slug and claim-mismatch redirects
+  so test never bounces to the prod/dev apex.
+- **CI:** deploy registry test row → `slotsense-test.chandraailabs.com`;
+  frontend build injects and fail-closes on `VITE_BASE_DOMAIN`.
+- **Bootstrap:** defaults base domain by environment; admin = `admin.<base>`;
+  manifest DNS documents wildcard A (no per-tenant records).
+- **Runbook:** `docs/runbooks/multi-env-dns-cutover.md` (Namecheap + cert cutover).
+
 ### feat(ci): progressive multi-env deploy (option A) + S-SMOKE health
 
 - **`deploy.yml`:** `push` main → `sport-slot-dev`; `workflow_dispatch`

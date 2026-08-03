@@ -82,9 +82,11 @@ locals {
 # (internal-and-cloud-load-balancing, Phase 8b) rejects direct *.run.app
 # probes. App-vs-edge localization: edge check + platform 5xx/latency alerts.
 
+# Probe host is synthetic under the env base domain (ADR-0046): covered by
+# the wildcard A + cert; not a real tenant. Each env probes its own zone.
 resource "google_monitoring_uptime_check_config" "edge_health" {
   project      = var.project_id
-  display_name = "Edge health — probe.slotsense.chandraailabs.com"
+  display_name = "Edge health — probe.${var.base_domain}"
   timeout      = "10s"
   period       = "300s"
 
@@ -99,7 +101,7 @@ resource "google_monitoring_uptime_check_config" "edge_health" {
     type = "uptime_url"
     labels = {
       project_id = var.project_id
-      host       = "probe.slotsense.chandraailabs.com"
+      host       = "probe.${var.base_domain}"
     }
   }
 }

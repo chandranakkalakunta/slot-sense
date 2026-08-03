@@ -21,7 +21,11 @@ import { loadBrandingForSlug } from "../lib/branding";
 import { setClaimsErrorHandler } from "../lib/api";
 import { auth } from "../lib/firebase";
 
-const _APEX = "slotsense.chandraailabs.com";
+/** Per-env base domain (ADR-0046). Must match SPORTSLOT_BASE_DOMAIN / Terraform
+ *  var.base_domain for this build (e.g. slotsense-test.chandraailabs.com). */
+export function baseDomain(): string {
+  return import.meta.env.VITE_BASE_DOMAIN || "slotsense.chandraailabs.com";
+}
 
 /**
  * Mirrors the backend's `_slug_from_host` three-way logic (ADR-0007):
@@ -29,9 +33,9 @@ const _APEX = "slotsense.chandraailabs.com";
  *   {x}.apex   → "{x}" (tenant subdomain)
  *   anything else (localhost, *.web.app, *.run.app, unknown) → null (skip check)
  */
-export function slugFromHost(hostname: string): string | null {
-  if (hostname === _APEX) return "";
-  if (hostname.endsWith(`.${_APEX}`)) return hostname.slice(0, hostname.length - _APEX.length - 1);
+export function slugFromHost(hostname: string, apex: string = baseDomain()): string | null {
+  if (hostname === apex) return "";
+  if (hostname.endsWith(`.${apex}`)) return hostname.slice(0, hostname.length - apex.length - 1);
   return null;
 }
 
@@ -78,12 +82,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // tenant_slug, sign out and hard-navigate to the correct subdomain.
         // Skips for platform_admin (no tenant_slug) and non-SlotSense hosts
         // (null → local dev / *.web.app / *.run.app).
-        const hostSlug = slugFromHost(window.location.hostname);
+        const apex = baseDomain();
+        const hostSlug = slugFromHost(window.location.hostname, apex);
         if (result.claims.role !== "platform_admin" && hostSlug !== null) {
           const claimSlug = result.claims.tenant_slug;
           if (hostSlug !== claimSlug) {
             await fbSignOut(auth);
-            window.location.href = `https://${claimSlug}.${_APEX}/signin?redirected=1`;
+            // Stay on this env's base domain (ADR-0046) — never bounce to another zone.
+            if (typeof claimSlug === "string" && claimSlug.length > 0) {
+              window.location.href = `https://${claimSlug}.${apex}/signin?redirected=1`;
+            }
             return;
           }
         }

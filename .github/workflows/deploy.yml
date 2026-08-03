@@ -221,6 +221,7 @@ jobs:
           FIREBASE_ACCESS_TOKEN: ${{ steps.fb_auth.outputs.access_token }}
           FIREBASE_PROJECT: ${{ needs.resolve.outputs.project_id }}
           FB_CFG: ${{ needs.resolve.outputs.firebase_config }}
+          VITE_BASE_DOMAIN: ${{ needs.resolve.outputs.base_domain }}
         run: |
           set -euo pipefail
           test -f "$FB_CFG" || { echo "Missing Firebase config: $FB_CFG"; exit 1; }
@@ -230,6 +231,8 @@ jobs:
           export VITE_FIREBASE_STORAGE_BUCKET="$(jq -r .storageBucket "$FB_CFG")"
           export VITE_FIREBASE_MESSAGING_SENDER_ID="$(jq -r .messagingSenderId "$FB_CFG")"
           export VITE_FIREBASE_APP_ID="$(jq -r .appId "$FB_CFG")"
+          # ADR-0046: must match SPORTSLOT_BASE_DOMAIN / Terraform var.base_domain
+          export VITE_BASE_DOMAIN="${VITE_BASE_DOMAIN:?VITE_BASE_DOMAIN required from registry}"
 
           (cd frontend && pnpm build)
 
@@ -242,6 +245,12 @@ jobs:
           fi
           if [[ "${FIREBASE_PROJECT}" != "sport-slot-dev" ]] && grep -q 'projectId:"sport-slot-dev"' "$JS"; then
             echo "FATAL: frontend still embeds sport-slot-dev"
+            exit 1
+          fi
+          # Fail closed if SPA embeds wrong base domain (host↔claim redirects)
+          if ! grep -qF "${VITE_BASE_DOMAIN}" "$JS"; then
+            echo "FATAL: frontend dist does not embed VITE_BASE_DOMAIN=${VITE_BASE_DOMAIN}"
+            grep -oE 'slotsense[a-z0-9.-]*\.chandraailabs\.com' "$JS" | sort -u || true
             exit 1
           fi
 

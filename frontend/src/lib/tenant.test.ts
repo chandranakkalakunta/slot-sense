@@ -6,6 +6,16 @@ test("extracts slug from tenant subdomain", () => {
   expect(tenantSlugFromHost("demo.slotsense.chandraailabs.com")).toBe("demo");
 });
 
+test("ADR-0046: extracts slug under VITE_BASE_DOMAIN test apex", () => {
+  vi.stubEnv("VITE_BASE_DOMAIN", "slotsense-test.chandraailabs.com");
+  vi.stubEnv("VITE_DEFAULT_TENANT_SLUG", "");
+  expect(tenantSlugFromHost("rvrg.slotsense-test.chandraailabs.com")).toBe("rvrg");
+  expect(tenantSlugFromHost("slotsense-test.chandraailabs.com")).toBeNull();
+  // Parent shared zone is not this env (and no default slug configured)
+  expect(tenantSlugFromHost("rvrg.slotsense.chandraailabs.com")).toBeNull();
+  vi.unstubAllEnvs();
+});
+
 test("returns null for unrelated host when no default configured", () => {
   vi.stubEnv("VITE_DEFAULT_TENANT_SLUG", "");
   expect(tenantSlugFromHost("example.com")).toBeNull();
