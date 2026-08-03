@@ -47,6 +47,18 @@ resource "google_artifact_registry_repository" "sport_slot_repo" {
   depends_on = [google_project_service.enabled_apis]
 }
 
+# Downstream env CI (WIF principalSet) reads images for same-SHA promote
+# (docs/design/same-sha-image-promote.md). Empty list = no external readers.
+resource "google_artifact_registry_repository_iam_member" "external_readers" {
+  for_each = toset(var.artifact_registry_reader_members)
+
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.sport_slot_repo.name
+  role       = "roles/artifactregistry.reader"
+  member     = each.value
+}
+
 # Cloud Build source-staging bucket (`gcloud builds submit
 # --gcs-source-staging-dir`, scripts/build_push.sh). Previously
 # auto-created by Cloud Build on first use — absent from a fresh

@@ -261,41 +261,56 @@ uv run python ../scripts/concurrency_test.py \
 |---|---|---|
 | CI gates on PR/main | Yes | Keep |
 | Deploy on main | **Parameterized** `deploy.yml` (option A) | Keep; add prod when ready |
-| Auto-deploy standing dev | `push` → `sport-slot-dev` | Keep |
+| Auto-deploy standing dev | `push` → `sport-slot-dev` (**build** image) | Keep |
 | Promote by SHA | **`workflow_dispatch`** + env + optional `git_sha` | Keep |
+| Same API image digest | **`promote_from` + `promote_image.sh`** (copy AR→AR) | Keep; fail if source missing |
+| Frontend per env | Rebuild with target `VITE_*` | Keep (env config baked) |
 | Registry | `.github/deploy-environments.json` + firebase web configs | Extend per new env |
 | S-SMOKE after deploy | Health curl with retries | Optional login smoke later |
 | GitHub Environments | Jobs use `dev` / `test` | Required reviewers in Settings |
 | Test evidence for prod | Informal until prod exists | ADR-0045 D5 checklist |
 
+Design detail: [docs/design/same-sha-image-promote.md](../design/same-sha-image-promote.md).
+
 ### 5.4 Promote to **test** (primary path — GitHub Actions)
 
 1. Commit is on **`main`** (WIF only allows `refs/heads/main`).  
-2. Open **Actions → Deploy → Run workflow**.  
-3. Branch: **main**.  
-4. Inputs:  
+2. That SHA must already have been **built on standing dev** (image tag =
+   short SHA in `sport-slot-dev` / `sport-slot-repo`).  
+3. On **dev** Terraform: `artifact_registry_reader_members` includes the test
+   WIF `principalSet` (one-time IAM; see design doc).  
+4. Open **Actions → Deploy → Run workflow**.  
+5. Branch: **main**.  
+6. Inputs:  
    - **environment:** `slot-sense-test-01`  
    - **git_sha:** full SHA to promote, or empty for current branch tip  
-5. Wait for `resolve` → `gates` → `deploy` → `smoke`.  
-6. Confirm `https://admin-test.slotsense.chandraailabs.com/health`.
+7. Wait for `resolve` → `gates` → `deploy` → `smoke`.  
+   Deploy logs should show `image_mode=promote` and **no** Cloud Build for the API.  
+8. Confirm health on the env base domain, e.g.  
+   `https://admin.slotsense-test.chandraailabs.com/health` (ADR-0046).
 
 **Once per repo:** Settings → Environments → create **`dev`** and **`test`**  
 (names must match `github_environment` in `deploy-environments.json`).
 
-**Add a new env:** firebase web JSON + row in `deploy-environments.json` + workflow choice option.
+**Add a new env:** firebase web JSON + row in `deploy-environments.json`
+(`promote_from` for non-build envs) + workflow choice option + AR reader IAM on source.
 
 ### 5.5 Manual deploy fallback (if Actions unavailable)
 
 ```bash
+# Prefer promote (same digest as dev) after test recreate:
 export SLOTSENSE_PROJECT=slot-sense-test-01
 export SLOTSENSE_REGION=asia-south1
 export SLOTSENSE_ARTIFACT_REPO=slot-sense-repo
-export SLOTSENSE_BASE_DOMAIN=slotsense.chandraailabs.com
-export SLOTSENSE_ADMIN_HOST=admin-test.slotsense.chandraailabs.com
+export SLOTSENSE_SOURCE_PROJECT=sport-slot-dev
+export SLOTSENSE_SOURCE_ARTIFACT_REPO=sport-slot-repo
+export SLOTSENSE_BASE_DOMAIN=slotsense-test.chandraailabs.com
+export SLOTSENSE_ADMIN_HOST=admin.slotsense-test.chandraailabs.com
 export CI=true
-./scripts/build_push.sh
+./scripts/promote_image.sh <git-sha>
 ./scripts/deploy_cloud_run.sh "$(cat .last_image_tag)"
-# frontend: VITE_* from infrastructure/firebase-web-configs/slot-sense-test-01.json
+# frontend: VITE_BASE_DOMAIN + VITE_FIREBASE_* from
+# infrastructure/firebase-web-configs/slot-sense-test-01.json
 # + deploy_hosting_rest + GCS sync (same as workflow)
 ```
 

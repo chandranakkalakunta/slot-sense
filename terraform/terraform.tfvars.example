@@ -23,4 +23,11 @@ github_repository  = "chandranakkalakunta/slot-sense"
 # artifact_repo_name  = "slot-sense-repo"
 # bootstrap_image_tag = "bootstrap"
 # enable_sms_alerts   = false  # true only after the "Coordinator SMS" channel exists and is phone-verified (sport-slot-dev sets true)
+#
+# Same-SHA promote: on the SOURCE env (usually standing dev), grant downstream
+# CI principalSets reader on this AR so promote_image.sh can copy without rebuild.
+# Example member for slot-sense-test-01 (project_number 543027201830):
+# artifact_registry_reader_members = [
+#   "principalSet://iam.googleapis.com/projects/543027201830/locations/global/workloadIdentityPools/github-actions-pool/attribute.repository/chandranakkalakunta/slot-sense",
+# ]
 

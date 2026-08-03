@@ -10,7 +10,8 @@
     "app_environment": "development",
     "frontend_bucket": "sport-slot-dev-frontend",
     "firebase_config": "infrastructure/firebase-web-configs/sport-slot-dev.json",
-    "health_url": "https://admin.slotsense.chandraailabs.com/health"
+    "health_url": "https://admin.slotsense.chandraailabs.com/health",
+    "promote_from": null
   },
   "slot-sense-test-01": {
     "github_environment": "test",
@@ -23,6 +24,7 @@
     "app_environment": "test",
     "frontend_bucket": "slot-sense-test-01-frontend",
     "firebase_config": "infrastructure/firebase-web-configs/slot-sense-test-01.json",
-    "health_url": "https://admin.slotsense-test.chandraailabs.com/health"
+    "health_url": "https://admin.slotsense-test.chandraailabs.com/health",
+    "promote_from": "sport-slot-dev"
   }
 }
