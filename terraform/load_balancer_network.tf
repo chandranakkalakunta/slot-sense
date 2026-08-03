@@ -35,10 +35,13 @@ resource "google_compute_global_address" "slotsense_lb_ip" {
 # to retrieve the exact CNAME record (name + data) that must be added at
 # Namecheap. The CNAME must remain permanently — removing it prevents
 # automatic cert renewal.
+# Per-env base domain (ADR-0046): each project owns
+#   var.base_domain + *.var.base_domain
+# e.g. slotsense-test.chandraailabs.com for test.
 resource "google_certificate_manager_dns_authorization" "slotsense" {
   name    = "slotsense-dns-auth"
   project = var.project_id
-  domain  = "slotsense.chandraailabs.com"
+  domain  = var.base_domain
 }
 
 # Managed wildcard certificate covering both the apex and wildcard,
@@ -49,8 +52,8 @@ resource "google_certificate_manager_certificate" "slotsense_wildcard_cert" {
 
   managed {
     domains = [
-      "slotsense.chandraailabs.com",
-      "*.slotsense.chandraailabs.com",
+      var.base_domain,
+      "*.${var.base_domain}",
     ]
     dns_authorizations = [
       google_certificate_manager_dns_authorization.slotsense.id,

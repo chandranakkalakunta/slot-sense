@@ -89,6 +89,7 @@ establishing the architectural foundation.
 | ADR | Title | Status | Summary |
 |-----|-------|--------|---------|
 | [0045](0045-test-strategy-and-environment-promotion.md) | Test Strategy & Environment Promotion | Accepted | Layered suites (static, unit regression, smoke, functional, perf); same-SHA progressive promote CI→dev→test→prod; prod human approval; runbook in docs/testing/TEST-STRATEGY.md |
+| [0046](0046-multi-env-base-domains.md) | Multi-Environment Base Domains | Accepted | Per-env base (`slotsense-dev` / `slotsense-test` / `slotsense`); one wildcard A + Certificate Manager cert per project; plain tenant slugs; retires Pattern B shared-zone hosts |
 
 ## Phase 7 — Notifications & Self-Service Password Reset
 

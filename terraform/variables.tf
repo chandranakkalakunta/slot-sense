@@ -79,13 +79,13 @@ variable "default_labels" {
 }
 
 variable "base_domain" {
-  description = "Base domain for tenant subdomains and hosts"
+  description = "Per-env base domain (ADR-0046). Tenants = {slug}.{base_domain}; one wildcard DNS A per env. Examples: slotsense-dev.chandraailabs.com, slotsense-test.chandraailabs.com, slotsense.chandraailabs.com (prod)."
   type        = string
   default     = "slotsense.chandraailabs.com"
 }
 
 variable "admin_host" {
-  description = "Admin host (defaults to admin.<base_domain>)"
+  description = "Platform admin host (typically admin.<base_domain>)"
   type        = string
   default     = "admin.slotsense.chandraailabs.com"
 }

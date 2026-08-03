@@ -38,6 +38,8 @@ TF_DIR="${REPO_ROOT}/terraform"
 DEFAULT_REGION="asia-south1"
 DEFAULT_ZONE="asia-south1-c" # NOTE: decorative for Redis — see report; base_infra.tf
                               # hardcodes location_id="asia-south1-c" independent of this var.
+# Fallback only when environment is unknown; after --environment is set,
+# derive_default_base_domain applies ADR-0046 per-env bases.
 DEFAULT_BASE_DOMAIN="slotsense.chandraailabs.com"
 DEFAULT_ADMIN_HOST="admin.slotsense.chandraailabs.com"
 DEFAULT_ARTIFACT_REPO="slot-sense-repo"
@@ -85,6 +87,7 @@ TIMING_FILE=""
 FIREBASE_WEB_CONFIG_FILE=""
 PUBLIC_HOST_LABEL=""
 REGISTRY_ENV_NAME=""
+BASE_DOMAIN_EXPLICIT=0
 ADMIN_HOST_EXPLICIT=0
 ADMIN_EMAIL_CAPTURED=""
 ADMIN_TEMP_PASSWORD=""
@@ -156,44 +159,43 @@ record_elapsed() {
   echo "Phase ${phase} (${label})|${seconds}s" >> "${TIMING_FILE}"
 }
 
-# ─── Multi-env host + registry helpers ──────────────────────────────────
-# Host model (flat one-label names under base_domain so a single cert
-# *.slotsense.chandraailabs.com still works):
+# ─── Multi-env host + registry helpers (ADR-0046) ───────────────────────
+# One base domain per environment — each has its own wildcard cert + A:
 #
-#   Platform admin / env entry (NO tenant slug):
-#     dev  → admin-dev.<base>
-#     test → admin-test.<base>
-#     prod → admin.<base>
+#   dev  → slotsense-dev.chandraailabs.com
+#   test → slotsense-test.chandraailabs.com
+#   prod → slotsense.chandraailabs.com
 #
-#   Tenants (created later in the product, NOT by bootstrap):
-#     {tenant-slug}.<base>  e.g. acme-test.<base>, rvrg-dev.<base>
-#     Each tenant host is an A/CNAME to THAT env's LB IP. Bootstrap never
-#     invents a demo tenant name (rvrg-*) — that mixed "env" with "tenant"
-#     and confused operators.
+# Hosts under that base (no env slug suffixes):
+#   Platform admin: admin.<base_domain>
+#   Tenants:        {slug}.<base_domain>   e.g. rvrg.slotsense-test.…
 #
-# Multi-env simultaneous: do NOT point *.slotsense at a single LB IP.
-# That would send admin-dev AND admin-test to the same project. Use
-# explicit A records per env host → that env's LB IP (see Phase 9 manifest).
-derive_public_host_label() {
-  # Health-check / curl host = same left-label as platform admin (no tenant).
+# DNS per env (Namecheap host under chandraailabs.com):
+#   *.<base_label>  A → this env's LB IP
+#   <base_label>    A → this env's LB IP
+#   admin.<base_label> A → this env's LB IP (optional if wildcard covers it)
+#   _acme-challenge.<base_label> CNAME → Certificate Manager (permanent)
+#
+# Bootstrap never invents demo tenant names. Pattern B (admin-test / rvrg-test
+# under a shared *.slotsense) is retired.
+derive_default_base_domain() {
   case "$1" in
-    dev) echo "admin-dev" ;;
-    test) echo "admin-test" ;;
-    prod-india|prod-uae) echo "admin" ;;
-    *) echo "admin-dev" ;;
+    dev) echo "slotsense-dev.chandraailabs.com" ;;
+    test) echo "slotsense-test.chandraailabs.com" ;;
+    prod-india|prod-uae) echo "slotsense.chandraailabs.com" ;;
+    *) echo "slotsense.chandraailabs.com" ;;
   esac
 }
 
-# Per-env admin host so test/dev/prod can coexist under the same wildcard
-# cert without sharing one admin A-record target.
+derive_public_host_label() {
+  # Health-check host left-label = platform admin (no tenant).
+  echo "admin"
+}
+
+# Admin is always admin.<base_domain> once base is per-env (ADR-0046).
 derive_admin_host() {
-  local env="$1" base="$2"
-  case "$env" in
-    dev) echo "admin-dev.${base}" ;;
-    test) echo "admin-test.${base}" ;;
-    prod-india|prod-uae) echo "admin.${base}" ;;
-    *) echo "admin.${base}" ;;
-  esac
+  local _env="$1" base="$2"
+  echo "admin.${base}"
 }
 
 # scripts/tf.sh registry key: sport-slot-dev → "dev"; slot-sense-dev-03 → "dev-03".
@@ -488,9 +490,10 @@ Options:
                               (default: asia-south1)
   --zone ZONE                Zonal default for the provider block (default: asia-south1-c)
   --environment ENV          dev | test | prod-india | prod-uae
-  --base-domain DOMAIN       (default: slotsense.chandraailabs.com)
-  --admin-host HOST          default is per-env under base-domain:
-                              dev→admin-dev.*  test→admin-test.*  prod→admin.*
+  --base-domain DOMAIN       ADR-0046 default by --environment:
+                              dev→slotsense-dev.*  test→slotsense-test.*
+                              prod→slotsense.*
+  --admin-host HOST          default: admin.<base-domain>
   --artifact-repo-name NAME  (default: slot-sense-repo)
   --org-id ID                GCP organization id (looked up + confirmed if omitted)
   --billing-account ID       GCP billing account id (looked up + confirmed if omitted)
@@ -574,7 +577,7 @@ while [[ $# -gt 0 ]]; do
     --region) REGION="$2"; shift 2 ;;
     --zone) ZONE="$2"; shift 2 ;;
     --environment) ENVIRONMENT="$2"; shift 2 ;;
-    --base-domain) BASE_DOMAIN="$2"; shift 2 ;;
+    --base-domain) BASE_DOMAIN="$2"; BASE_DOMAIN_EXPLICIT=1; shift 2 ;;
     --admin-host) ADMIN_HOST="$2"; ADMIN_HOST_EXPLICIT=1; shift 2 ;;
     --artifact-repo-name) ARTIFACT_REPO_NAME="$2"; shift 2 ;;
     --org-id) ORG_ID="$2"; shift 2 ;;
@@ -628,7 +631,7 @@ phase0() {
   if [[ "${ZONE}" == "${DEFAULT_ZONE}" && -n "${CACHED_ZONE:-}" ]]; then
     ZONE="${CACHED_ZONE}"
   fi
-  if [[ "${BASE_DOMAIN}" == "${DEFAULT_BASE_DOMAIN}" && -n "${CACHED_BASE_DOMAIN:-}" ]]; then
+  if [[ "${BASE_DOMAIN_EXPLICIT}" -eq 0 && -n "${CACHED_BASE_DOMAIN:-}" ]]; then
     BASE_DOMAIN="${CACHED_BASE_DOMAIN}"
   fi
   if [[ "${ADMIN_HOST_EXPLICIT}" -eq 0 ]]; then
@@ -659,7 +662,12 @@ phase0() {
   fi
   validate_environment "${ENVIRONMENT}" || fail 0 "invalid environment."
 
-  # Derive per-env hosts (Pattern B) when the operator did not pin them.
+  # ADR-0046: default base domain from environment unless operator/cache pinned it.
+  if [[ "${BASE_DOMAIN_EXPLICIT}" -eq 0 && -z "${CACHED_BASE_DOMAIN:-}" ]]; then
+    BASE_DOMAIN="$(derive_default_base_domain "${ENVIRONMENT}")"
+  fi
+
+  # Derive hosts under the per-env base (admin.<base>, not Pattern-B admin-test).
   PUBLIC_HOST_LABEL="${PUBLIC_HOST_LABEL:-$(derive_public_host_label "${ENVIRONMENT}")}"
   REGISTRY_ENV_NAME="${REGISTRY_ENV_NAME:-$(derive_registry_env_name "${PROJECT_ID}")}"
   if [[ "${ADMIN_HOST_EXPLICIT}" -eq 0 && -z "${CACHED_ADMIN_HOST:-}" ]]; then
@@ -1349,7 +1357,7 @@ phase9() {
     echo "| zone | ${ZONE} (decorative for Redis — location_id is hardcoded in base_infra.tf) |"
     echo "| environment | ${ENVIRONMENT} |"
     echo "| base_domain | ${BASE_DOMAIN} |"
-    echo "| public_host (Pattern B) | ${public_host} |"
+    echo "| public_host | ${public_host} |"
     echo "| admin_host | ${ADMIN_HOST} |"
     echo "| tf.sh registry key | ${REGISTRY_ENV_NAME} |"
     echo "| artifact_repo_name | ${ARTIFACT_REPO_NAME} |"
@@ -1366,22 +1374,20 @@ phase9() {
     echo "- Platform admin email: \`${ADMIN_EMAIL_CAPTURED:-admin@chandraailabs.com}\`"
     echo "- Temp password: \`${ADMIN_TEMP_PASSWORD:-<not captured — re-run seed_platform_admin.py --project ${PROJECT_ID}>}\`"
     echo "- Sign in **fresh** (sign-out first if any old session); custom claims only appear on a new ID token."
-    echo "- Tenant hosts are **not** created by bootstrap. After you create a tenant with slug"
-    echo "  e.g. \`myclub-test\`, add DNS A: \`myclub-test.${BASE_DOMAIN}\` → this LB IP, then open that URL."
+    echo "- Tenant hosts need **no per-tenant DNS** (ADR-0046). After you create a tenant with slug"
+    echo "  e.g. \`rvrg\`, open \`https://rvrg.${BASE_DOMAIN}\` — covered by the env wildcard A."
     echo ""
-    echo "## Load balancer + DNS (manual — external registrar)"
+    echo "## Load balancer + DNS (manual — external registrar; ADR-0046)"
     echo ""
     echo "- LB static IP for **this** environment only: **${lb_ip}**"
-    echo "- Do **not** set a single \`*.${BASE_DOMAIN}\` A record to this IP if dev/test/prod"
-    echo "  must run at the same time — that would send **all** subdomains here."
-    echo "- Create **explicit** A records for this env only:"
-    echo "  - A: \`${ADMIN_HOST}\` → \`${lb_ip}\`  (platform admin + health)"
-    if [[ "${public_host}" != "${ADMIN_HOST}" ]]; then
-      echo "  - A: \`${public_host}\` → \`${lb_ip}\`"
-    fi
-    echo "  - Later, per tenant: A: \`{tenant-slug}.${BASE_DOMAIN}\` → \`${lb_ip}\`"
+    echo "- Each env has its **own** base domain and wildcard A → **this** IP only."
+    echo "- Namecheap records for this env (domain = parent of \`${BASE_DOMAIN}\`):"
+    echo "  - A: \`*.<base_label>\` → \`${lb_ip}\`  (all tenants + admin if not separate)"
+    echo "  - A: \`<base_label>\` → \`${lb_ip}\`  (apex)"
+    echo "  - A: \`admin.<base_label>\` → \`${lb_ip}\`  (platform admin; optional if wildcard covers it)"
     echo "  - CNAME (permanent, cert renewal): \`${cname_name}\` → \`${cname_data}\`"
-    echo "- Wildcard cert \`*.${BASE_DOMAIN}\` covers HTTPS names; **DNS A/CNAME chooses which LB IP**."
+    echo "- Do **not** share one \`*.slotsense\` A across dev/test/prod — that routes all envs to one LB."
+    echo "- Wildcard cert covers \`*.${BASE_DOMAIN}\` + apex; ACME CNAME must stay forever."
     echo "- After DNS: \`curl -sf https://${ADMIN_HOST}/health\` → \`{\"status\":\"ok\"}\`"
     echo ""
     echo "## Cloud Run"
