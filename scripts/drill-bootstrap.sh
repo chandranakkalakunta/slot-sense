@@ -1032,7 +1032,7 @@ phase6() {
     return 0
   fi
 
-  local attempt=1 max_attempts=3
+  local attempt=1 max_attempts=4
   while true; do
     local apply_log
     apply_log="$(mktemp)"
@@ -1040,11 +1040,30 @@ phase6() {
       rm -f "${apply_log}"
       break
     fi
+    # Org policy allow_public_members can lag → allUsers on frontend bucket 412.
     if grep -qE '412|allowedPolicyMemberDomains|org.?policy' "${apply_log}" && [[ "${attempt}" -lt "${max_attempts}" ]]; then
       log "Main apply hit the expected org-policy propagation 412 (attempt ${attempt}/${max_attempts}) — waiting 60s and retrying..."
       rm -f "${apply_log}"
       attempt=$((attempt + 1))
       sleep 60
+      continue
+    fi
+    # Cloud Run create failed (often secretAccessor race) → resource tainted →
+    # next plan wants destroy+recreate but prevent_destroy blocks. Drop the
+    # failed service + state entry so the next apply creates cleanly.
+    if grep -qE 'prevent_destroy|is tainted, so must be replaced' "${apply_log}" \
+      && grep -qE 'google_cloud_run_v2_service\.sport_slot_api|sport_slot_api' "${apply_log}" \
+      && [[ "${attempt}" -lt "${max_attempts}" ]]; then
+      log "Main apply blocked on tainted Cloud Run + prevent_destroy (attempt ${attempt}/${max_attempts})."
+      log "Recovering: delete failed service (if any) and remove from Terraform state, then retry..."
+      gcloud run services delete sport-slot-api \
+        --project="${PROJECT_ID}" --region="${REGION}" --quiet 2>/dev/null \
+        || log "  (no live sport-slot-api to delete — OK)"
+      (cd "${TF_DIR}" && terraform state rm 'google_cloud_run_v2_service.sport_slot_api' 2>/dev/null) \
+        || log "  (service not in state — OK)"
+      rm -f "${apply_log}"
+      attempt=$((attempt + 1))
+      sleep 15
       continue
     fi
     rm -f "${apply_log}"
