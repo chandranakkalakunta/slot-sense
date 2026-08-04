@@ -44,7 +44,9 @@ resource "google_cloud_run_v2_service" "sport_slot_api" {
     max_instance_request_concurrency = 80
 
     scaling {
-      max_instance_count = 10 # ADR-0041 D15: cap not floor; minScale stays 0
+      # Test may set min=1 for warm latency (perf / S-FUNC); prod keeps 0.
+      min_instance_count = var.cloud_run_min_instances
+      max_instance_count = var.cloud_run_max_instances # ADR-0041 D15: cap not floor
     }
 
     vpc_access {

@@ -108,6 +108,28 @@ variable "bootstrap_image_tag" {
   default     = "faa1695"
 }
 
+variable "cloud_run_min_instances" {
+  description = "Cloud Run min instances (0 = scale to zero). Test load envs often use 1 to avoid cold starts during S-FUNC/perf."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.cloud_run_min_instances >= 0 && var.cloud_run_min_instances <= 10
+    error_message = "cloud_run_min_instances must be 0–10."
+  }
+}
+
+variable "cloud_run_max_instances" {
+  description = "Cloud Run max instances cap (ADR-0041 D15)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.cloud_run_max_instances >= 1 && var.cloud_run_max_instances <= 100
+    error_message = "cloud_run_max_instances must be 1–100."
+  }
+}
+
 variable "enable_sms_alerts" {
   description = "Whether to attach the console-created 'Coordinator SMS' notification channel to alert policies. New environments start email-only (the channel requires manual phone verification); set true after creating and verifying the channel. Legacy sport-slot-dev sets true."
   type        = bool
