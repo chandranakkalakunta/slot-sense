@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### test(func): remaining S-FUNC + Playwright smoke + CI workflow
+
+Agent propose/confirm, invoice admin (latest/export/regenerate), health
+latency sample, Playwright sign-in E2E (`tests/e2e`), GitHub
+`functional.yml` workflow_dispatch, R2 regression checklist doc.
+
 ### test(func): expand S-FUNC to full critical journey pack
 
 Platform catalog CRUD, tenant provision + 6-digit force-password,

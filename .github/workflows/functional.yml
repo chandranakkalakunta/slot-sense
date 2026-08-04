@@ -1,0 +1,97 @@
+# S-FUNC live suite against a deployed env (ADR-0045).
+# Manual only — needs secrets / vars for credentials. Not on every PR.
+#
+# Repo Settings → Secrets and variables → Actions (or Environment "test"):
+#   FUNC_FIREBASE_API_KEY, FUNC_RESIDENT_EMAIL, FUNC_RESIDENT_PASSWORD
+# Optional: FUNC_PLATFORM_ADMIN_*, FUNC_TENANT_ADMIN_*, FUNC_FACILITY_ID
+# Optional vars: FUNC_BASE_DOMAIN, FUNC_PROJECT_ID, FUNC_TENANT_SLUG, FUNC_ADMIN_HOST
+
+name: Functional (S-FUNC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deploy registry key (deploy-environments.json)
+        required: true
+        type: choice
+        options:
+          - slot-sense-test-03
+          - sport-slot-dev
+      skip_agent:
+        description: Skip agent/Vertex tests
+        type: boolean
+        default: false
+      skip_mutations:
+        description: Skip catalog/tenant create mutations
+        type: boolean
+        default: false
+      skip_voice:
+        description: Skip voice
+        type: boolean
+        default: true
+      skip_concurrency:
+        description: Skip concurrency stress
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  s-func:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment == 'sport-slot-dev' && 'dev' || 'test' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve env from registry
+        id: reg
+        run: |
+          set -euo pipefail
+          ROW=$(jq -c --arg e "${{ inputs.environment }}" '.[$e]' .github/deploy-environments.json)
+          echo "base_domain=$(echo "$ROW" | jq -r .base_domain)" >> "$GITHUB_OUTPUT"
+          echo "admin_host=$(echo "$ROW" | jq -r .admin_host)" >> "$GITHUB_OUTPUT"
+          echo "project_id=$(echo "$ROW" | jq -r .project_id)" >> "$GITHUB_OUTPUT"
+          echo "firebase_config=$(echo "$ROW" | jq -r .firebase_config)" >> "$GITHUB_OUTPUT"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Backend deps (httpx/pytest)
+        working-directory: backend
+        run: |
+          uv python install 3.12
+          uv sync --all-extras --dev
+
+      - name: Run S-FUNC
+        working-directory: backend
+        env:
+          FUNC_BASE_DOMAIN: ${{ steps.reg.outputs.base_domain }}
+          FUNC_ADMIN_HOST: ${{ steps.reg.outputs.admin_host }}
+          FUNC_PROJECT_ID: ${{ steps.reg.outputs.project_id }}
+          FUNC_TENANT_SLUG: ${{ vars.FUNC_TENANT_SLUG || 'marina-skies' }}
+          FUNC_FIREBASE_API_KEY: ${{ secrets.FUNC_FIREBASE_API_KEY }}
+          FUNC_RESIDENT_EMAIL: ${{ secrets.FUNC_RESIDENT_EMAIL }}
+          FUNC_RESIDENT_PASSWORD: ${{ secrets.FUNC_RESIDENT_PASSWORD }}
+          FUNC_PLATFORM_ADMIN_EMAIL: ${{ secrets.FUNC_PLATFORM_ADMIN_EMAIL }}
+          FUNC_PLATFORM_ADMIN_PASSWORD: ${{ secrets.FUNC_PLATFORM_ADMIN_PASSWORD }}
+          FUNC_TENANT_ADMIN_EMAIL: ${{ secrets.FUNC_TENANT_ADMIN_EMAIL }}
+          FUNC_TENANT_ADMIN_PASSWORD: ${{ secrets.FUNC_TENANT_ADMIN_PASSWORD }}
+          FUNC_FACILITY_ID: ${{ secrets.FUNC_FACILITY_ID }}
+          FUNC_SKIP_AGENT: ${{ inputs.skip_agent && '1' || '0' }}
+          FUNC_SKIP_MUTATIONS: ${{ inputs.skip_mutations && '1' || '0' }}
+          FUNC_SKIP_VOICE: ${{ inputs.skip_voice && '1' || '0' }}
+          FUNC_SKIP_CONCURRENCY: ${{ inputs.skip_concurrency && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FUNC_FIREBASE_API_KEY}" || -z "${FUNC_RESIDENT_EMAIL}" || -z "${FUNC_RESIDENT_PASSWORD}" ]]; then
+            # Fallback: public web API key from committed config
+            if [[ -z "${FUNC_FIREBASE_API_KEY}" && -f "../${{ steps.reg.outputs.firebase_config }}" ]]; then
+              export FUNC_FIREBASE_API_KEY="$(jq -r .apiKey "../${{ steps.reg.outputs.firebase_config }}")"
+            fi
+          fi
+          test -n "${FUNC_FIREBASE_API_KEY}" || { echo "Missing FUNC_FIREBASE_API_KEY"; exit 2; }
+          test -n "${FUNC_RESIDENT_EMAIL}" || { echo "Missing secret FUNC_RESIDENT_EMAIL"; exit 2; }
+          test -n "${FUNC_RESIDENT_PASSWORD}" || { echo "Missing secret FUNC_RESIDENT_PASSWORD"; exit 2; }
+          uv run pytest ../tests/functional -m functional -v --tb=short

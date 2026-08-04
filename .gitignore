@@ -71,6 +71,11 @@ frontend/dev-dist/
 # Functional suite credentials (S-FUNC)
 tests/functional/.env.local
 !tests/functional/.env.example
+# Playwright E2E
+tests/e2e/node_modules/
+tests/e2e/playwright-report/
+tests/e2e/test-results/
+
 
 # Terraform
 terraform/.terraform/
