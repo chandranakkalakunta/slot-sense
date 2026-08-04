@@ -52,9 +52,10 @@ def test_admin_host_as_tenant_slug_is_not_tenant_data(
 def test_agent_query_not_vertex_disabled(
     http: httpx.Client, cfg, auth_headers: dict[str, str]
 ) -> None:
-    """Vertex AI API disabled → 200 with safe-fallback only; detect via content.
+    """Vertex must produce a real reply — not orchestrator _SAFE_FALLBACK.
 
-    Would have caught missing aiplatform.googleapis.com on greenfield test.
+    Empty Vertex turns (API disabled, model/region/quota, IAM) all collapse
+    to the same canned string. This is an env-wiring check, not NLP quality.
     """
     if cfg.skip_agent:
         pytest.skip("FUNC_SKIP_AGENT=1")
@@ -77,12 +78,21 @@ def test_agent_query_not_vertex_disabled(
     )
     assert reply, f"empty agent reply: {body}"
 
-    # Classic empty-Vertex fallback (orchestrator _SAFE_FALLBACK)
-    fallback = "I can only help with facility availability and booking queries"
-    # If only fallback and very short, Vertex likely failed closed
-    if fallback.lower() in reply.lower() and len(reply) < 160:
+    # Exact orchestrator fallback when turn1 has no text and no tool call
+    # (vertex_generate_failed → agent_turn1_empty_response).
+    fallback_snip = "I can only help with facility availability and booking queries"
+    if fallback_snip.lower() in reply.lower() and len(reply) < 180:
         pytest.fail(
-            "Agent returned safe-fallback-only reply — likely Vertex/AI Platform "
-            f"disabled or IAM missing (reply={reply!r}). "
-            "Enable aiplatform.googleapis.com and roles/aiplatform.user on Cloud Run SA."
+            "Agent returned _SAFE_FALLBACK only — Vertex did not return text/tools.\n"
+            f"  reply={reply!r}\n"
+            "Check Cloud Run logs for vertex_generate_failed, then:\n"
+            f"  1) gcloud services enable aiplatform.googleapis.com --project={cfg.project_id or 'PROJECT'}\n"
+            "  2) roles/aiplatform.user on sa-cloud-run@PROJECT\n"
+            "  3) SPORTSLOT_VERTEX_PROJECT / SPORTSLOT_VERTEX_LOCATION / agent model\n"
+            "     (deploy sets VERTEX_PROJECT=project; model default gemini-2.5-flash @ asia-south1)\n"
+            "  4) Model access / quota for that project+region (new projects often need\n"
+            "     first Vertex use in console or a supported Gemini model region)\n"
+            "  gcloud logging read 'jsonPayload.message=\"vertex_generate_failed\"' "
+            f"--project={cfg.project_id or 'PROJECT'} --limit=5 --format=json\n"
+            "Skip with FUNC_SKIP_AGENT=1 if agent is out of scope for this run."
         )
