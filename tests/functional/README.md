@@ -35,13 +35,19 @@ cp tests/functional/.env.example tests/functional/.env.local
 ## Run
 
 ```bash
-# from repo root — uses backend uv env (httpx)
-set -a && source tests/functional/.env.local && set +a
-
+# Interactive (prompts with defaults; can save .env.local)
 ./scripts/run_functional.sh
-# or:
-cd backend && uv run pytest ../tests/functional -m functional -v
+
+# Non-interactive (must source env first)
+set -a && source tests/functional/.env.local && set +a
+./scripts/run_functional.sh --yes
+
+# Filter
+./scripts/run_functional.sh -k 'spa or health'
 ```
+
+Firebase API key default is loaded from
+`infrastructure/firebase-web-configs/<FUNC_PROJECT_ID>.json` when present.
 
 **Against test-03 defaults** (override with env):
 
@@ -61,6 +67,20 @@ cd backend && uv run pytest ../tests/functional -m functional -v
 - Public checks (health, SPA static scrape) always run when `FUNC_BASE_DOMAIN` is set.  
 - Agent test skips if `FUNC_SKIP_AGENT=1`.  
 - Booking mutate tests skip if `FUNC_SKIP_BOOKING=1` (read-only CI).
+
+## More cases (backlog — not yet automated)
+
+| ID | Case | Why |
+|---|---|---|
+| F-P1 | Platform admin catalog CRUD | Needs platform_admin credentials |
+| F-P2 | Create tenant + tenant_admin + 6-digit | Mutates registry; needs admin + cleanup |
+| F-P3 | Resident force-password path | Needs fresh seed user |
+| F-P4 | Book → cancel full lifecycle assert | Partial (create+cancel best-effort today) |
+| F-P5 | Daily overview / invoices | Tenant admin + data |
+| F-P6 | Voice STT/TTS turn | Audio fixture + Speech API |
+| F-P7 | Playwright UI (sign-in, book click) | Browser E2E |
+| F-P8 | Concurrency N parallel book → 1×201 | Wraps `scripts/concurrency_test.py` |
+| F-P9 | SPA redirect on admin after resident login | Needs browser or soft assert |
 
 ## CI later
 
