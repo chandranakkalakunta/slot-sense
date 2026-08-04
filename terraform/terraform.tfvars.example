@@ -23,6 +23,8 @@ github_repository  = "chandranakkalakunta/slot-sense"
 # artifact_repo_name  = "slot-sense-repo"
 # bootstrap_image_tag = "bootstrap"
 # enable_sms_alerts   = false  # true only after the "Coordinator SMS" channel exists and is phone-verified (sport-slot-dev sets true)
+# cloud_run_min_instances = 0  # test load: 1
+# cloud_run_max_instances = 10
 #
 # Same-SHA promote: on the SOURCE env (usually standing dev), grant downstream
 # CI principalSets reader on this AR so promote_image.sh can copy without rebuild.

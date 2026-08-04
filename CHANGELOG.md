@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### feat(test-env): multi-tenant population seeder + warm Cloud Run
+
+`scripts/seed_test_population.py` seeds 20 tenants (incl. marina-skies/rvrg),
+random flats/members, `{slug}.resident.n@example.com` with shared password,
+facilities by catalog × size, resumable state. Terraform
+`cloud_run_min_instances` / max for test warm instance. Runbook:
+`docs/runbooks/seed-test-population.md`.
+
 ### test(func): remaining S-FUNC + Playwright smoke + CI workflow
 
 Agent propose/confirm, invoice admin (latest/export/regenerate), health
