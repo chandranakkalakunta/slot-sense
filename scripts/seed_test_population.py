@@ -350,6 +350,20 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Override flat count upper cap for smoke (0 = use random 250-2000)",
     )
+    p.add_argument(
+        "--expand-to-full",
+        action="store_true",
+        help=(
+            "After a smoke run (complete=true, small n_flats), replan each tenant "
+            "to full 250–2000 flats / 2–6 members, clear complete, keep tenant_id "
+            "and global_counter. Existing users stay; new emails continue counter."
+        ),
+    )
+    p.add_argument(
+        "--reset-complete",
+        action="store_true",
+        help="Clear complete flags only (resume same plan sizes — use after interrupt).",
+    )
     p.add_argument("--state-file", type=Path, default=STATE_FILE)
     p.add_argument("--seed", type=int, default=42, help="RNG seed for reproducibility")
     p.add_argument(
@@ -405,10 +419,41 @@ def main() -> int:
                 plan.n_flats = min(plan.n_flats, args.max_flats)
                 plan.members_per_flat = plan.members_per_flat[: plan.n_flats]
                 plan.facilities_per_type = _tier_facilities_per_type(plan.n_flats)
+
+        # Smoke → full: replan size; keep tenant_id; clear complete so work continues
+        if args.expand_to_full:
+            old_flats, old_users = plan.n_flats, plan.users_done
+            full = _plan_tenant(slug, name, plan.tenant_id, rng)
+            plan.n_flats = full.n_flats
+            plan.members_per_flat = full.members_per_flat
+            plan.facilities_per_type = full.facilities_per_type
+            plan.complete = False
+            # Continue from previous users_done only if structure unchanged; after
+            # replan, rebuild from 0 with NEW emails (counter continues). Old users stay.
+            plan.users_done = 0
+            plan.facilities_done = False  # scale facilities to new tier
+            print(
+                f"[seed] EXPAND {slug}: {old_flats} flats / {old_users} users_done "
+                f"→ {plan.n_flats} flats / ~{_total_users(plan)} members "
+                f"(existing Auth users kept; new emails from counter)"
+            )
+        elif args.reset_complete and plan.complete:
+            plan.complete = False
+            print(f"[seed] reset complete flag for {slug} (same plan size)")
+
         plans.append(plan)
 
     total_planned = sum(_total_users(p) for p in plans)
-    print(f"[seed] 20 tenants planned; ~{total_planned} residents (before caps)")
+    print(f"[seed] 20 tenants planned; ~{total_planned} residents (before max-users caps)")
+    n_complete = sum(1 for p in plans if p.complete)
+    if n_complete == 20 and not args.expand_to_full:
+        print(
+            "[seed] NOTE: all 20 tenants are complete=true — nothing to do.\n"
+            "  This usually means a prior SMOKE run (--max-flats / --max-users-per-tenant).\n"
+            "  For full 250–2000 flats population, re-run with:\n"
+            "    --expand-to-full\n"
+            "  Or delete .seed-test-population-state.json and re-run without smoke caps."
+        )
 
     for plan in plans:
         if plan.complete and not args.dry_run:

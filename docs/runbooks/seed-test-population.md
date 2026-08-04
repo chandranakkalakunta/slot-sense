@@ -56,6 +56,29 @@ uv run python ../scripts/seed_test_population.py \
 
 Interrupt anytime; re-run the same command to **resume**.
 
+### “All tenants SKIP complete” after a smoke run
+
+Smoke uses `--max-flats` / `--max-users-per-tenant` and marks each tenant
+`complete=true` with a **small** plan (e.g. 5 flats). A later full run
+without flags **skips** those tenants — it is not stuck on “20 tenants”.
+
+**Expand smoke → full (keep existing users, continue counter):**
+
+```bash
+cd backend
+uv run python ../scripts/seed_test_population.py \
+  --project slot-sense-test-03 \
+  --expand-to-full \
+  --set-min-instances 0
+```
+
+**Start planning from scratch** (loses resume progress; Auth users remain):
+
+```bash
+rm -f .seed-test-population-state.json
+uv run python ../scripts/seed_test_population.py --project slot-sense-test-03
+```
+
 ## Terraform (min instances, durable)
 
 In `terraform/slot-sense-test-03.tfvars` (local):
