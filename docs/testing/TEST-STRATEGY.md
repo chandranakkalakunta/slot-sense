@@ -133,7 +133,9 @@ Run: `./scripts/run_functional.sh` (interactive prompts + defaults).
 | Agent | text (Vertex not fallback-only); voice optional |
 | Identity | `/users/me` |
 
-Browser Playwright remains backlog for pure UI journeys.
+**Browser Playwright:** `tests/e2e/` (sign-in + facilities smoke).  
+**CI:** Actions → Functional (S-FUNC) workflow_dispatch (secrets required).  
+**R2 list:** `docs/testing/R2-REGRESSION-PACK.md`.
 
 ### 2.4 Performance suite
 
