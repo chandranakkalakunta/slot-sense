@@ -132,26 +132,31 @@ if [[ -z "${_DEFAULT_API_KEY}" && -f "${_FB_CFG}" ]]; then
 fi
 prompt_default FUNC_FIREBASE_API_KEY "Firebase Web API key" "${_DEFAULT_API_KEY}"
 
-prompt_default FUNC_RESIDENT_EMAIL "Resident (or tenant_admin) email" "${FUNC_RESIDENT_EMAIL:-}"
+prompt_default FUNC_RESIDENT_EMAIL "Resident email" "${FUNC_RESIDENT_EMAIL:-}"
 prompt_secret FUNC_RESIDENT_PASSWORD "Resident password"
+
+prompt_default FUNC_PLATFORM_ADMIN_EMAIL "Platform admin email (catalog/tenant tests)" "${FUNC_PLATFORM_ADMIN_EMAIL:-}"
+prompt_secret FUNC_PLATFORM_ADMIN_PASSWORD "Platform admin password"
+
+prompt_default FUNC_TENANT_ADMIN_EMAIL "Tenant admin email (overview tests)" "${FUNC_TENANT_ADMIN_EMAIL:-}"
+prompt_secret FUNC_TENANT_ADMIN_PASSWORD "Tenant admin password"
 
 prompt_default FUNC_FACILITY_ID "Facility id (empty = auto-pick first)" "${FUNC_FACILITY_ID:-}"
 prompt_default FUNC_EXPECT_BUILD_ID "Expect build_id prefix (optional)" "${FUNC_EXPECT_BUILD_ID:-}"
+prompt_default FUNC_CONCURRENCY_N "Concurrency N (parallel books)" "${FUNC_CONCURRENCY_N:-10}"
 
 if _is_tty; then
-  if prompt_yes_no "Skip agent/Vertex test?" n; then
-    FUNC_SKIP_AGENT=1
-  else
-    FUNC_SKIP_AGENT="${FUNC_SKIP_AGENT:-0}"
-  fi
-  if prompt_yes_no "Skip booking create (Redis path)?" n; then
-    FUNC_SKIP_BOOKING=1
-  else
-    FUNC_SKIP_BOOKING="${FUNC_SKIP_BOOKING:-0}"
-  fi
+  if prompt_yes_no "Skip agent/Vertex test?" n; then FUNC_SKIP_AGENT=1; else FUNC_SKIP_AGENT="${FUNC_SKIP_AGENT:-0}"; fi
+  if prompt_yes_no "Skip booking create?" n; then FUNC_SKIP_BOOKING=1; else FUNC_SKIP_BOOKING="${FUNC_SKIP_BOOKING:-0}"; fi
+  if prompt_yes_no "Skip mutating admin tests (catalog/tenant create)?" n; then FUNC_SKIP_MUTATIONS=1; else FUNC_SKIP_MUTATIONS="${FUNC_SKIP_MUTATIONS:-0}"; fi
+  if prompt_yes_no "Skip concurrency stress?" n; then FUNC_SKIP_CONCURRENCY=1; else FUNC_SKIP_CONCURRENCY="${FUNC_SKIP_CONCURRENCY:-0}"; fi
+  if prompt_yes_no "Skip voice?" y; then FUNC_SKIP_VOICE=1; else FUNC_SKIP_VOICE="${FUNC_SKIP_VOICE:-0}"; fi
 else
   FUNC_SKIP_AGENT="${FUNC_SKIP_AGENT:-0}"
   FUNC_SKIP_BOOKING="${FUNC_SKIP_BOOKING:-0}"
+  FUNC_SKIP_MUTATIONS="${FUNC_SKIP_MUTATIONS:-0}"
+  FUNC_SKIP_CONCURRENCY="${FUNC_SKIP_CONCURRENCY:-0}"
+  FUNC_SKIP_VOICE="${FUNC_SKIP_VOICE:-1}"
 fi
 
 # ─── validate required ──────────────────────────────────────────────────
@@ -179,23 +184,34 @@ FUNC_PROJECT_ID=${FUNC_PROJECT_ID}
 FUNC_FIREBASE_API_KEY=${FUNC_FIREBASE_API_KEY}
 FUNC_RESIDENT_EMAIL=${FUNC_RESIDENT_EMAIL}
 FUNC_RESIDENT_PASSWORD=${FUNC_RESIDENT_PASSWORD}
+FUNC_PLATFORM_ADMIN_EMAIL=${FUNC_PLATFORM_ADMIN_EMAIL}
+FUNC_PLATFORM_ADMIN_PASSWORD=${FUNC_PLATFORM_ADMIN_PASSWORD}
+FUNC_TENANT_ADMIN_EMAIL=${FUNC_TENANT_ADMIN_EMAIL}
+FUNC_TENANT_ADMIN_PASSWORD=${FUNC_TENANT_ADMIN_PASSWORD}
 FUNC_FACILITY_ID=${FUNC_FACILITY_ID}
 FUNC_EXPECT_BUILD_ID=${FUNC_EXPECT_BUILD_ID}
+FUNC_CONCURRENCY_N=${FUNC_CONCURRENCY_N}
 FUNC_SKIP_AGENT=${FUNC_SKIP_AGENT}
 FUNC_SKIP_BOOKING=${FUNC_SKIP_BOOKING}
+FUNC_SKIP_MUTATIONS=${FUNC_SKIP_MUTATIONS}
+FUNC_SKIP_CONCURRENCY=${FUNC_SKIP_CONCURRENCY}
+FUNC_SKIP_VOICE=${FUNC_SKIP_VOICE}
 EOF
   echo "Wrote ${ENV_LOCAL}"
 fi
 
 export FUNC_BASE_DOMAIN FUNC_ADMIN_HOST FUNC_TENANT_SLUG FUNC_PROJECT_ID
 export FUNC_FIREBASE_API_KEY FUNC_RESIDENT_EMAIL FUNC_RESIDENT_PASSWORD
-export FUNC_FACILITY_ID FUNC_EXPECT_BUILD_ID FUNC_SKIP_AGENT FUNC_SKIP_BOOKING
+export FUNC_PLATFORM_ADMIN_EMAIL FUNC_PLATFORM_ADMIN_PASSWORD
+export FUNC_TENANT_ADMIN_EMAIL FUNC_TENANT_ADMIN_PASSWORD
+export FUNC_FACILITY_ID FUNC_EXPECT_BUILD_ID FUNC_CONCURRENCY_N
+export FUNC_SKIP_AGENT FUNC_SKIP_BOOKING FUNC_SKIP_MUTATIONS FUNC_SKIP_CONCURRENCY FUNC_SKIP_VOICE
 
 echo
 echo "S-FUNC target: base=${FUNC_BASE_DOMAIN} tenant=${FUNC_TENANT_SLUG} project=${FUNC_PROJECT_ID}"
 echo "  admin=https://${FUNC_ADMIN_HOST}"
 echo "  tenant=https://${FUNC_TENANT_SLUG}.${FUNC_BASE_DOMAIN}"
-echo "  skip_agent=${FUNC_SKIP_AGENT} skip_booking=${FUNC_SKIP_BOOKING}"
+echo "  skip: agent=${FUNC_SKIP_AGENT} booking=${FUNC_SKIP_BOOKING} mutations=${FUNC_SKIP_MUTATIONS} concurrency=${FUNC_SKIP_CONCURRENCY} voice=${FUNC_SKIP_VOICE}"
 echo
 
 cd "${REPO_ROOT}/backend"

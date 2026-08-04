@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### test(func): expand S-FUNC to full critical journey pack
+
+Platform catalog CRUD, tenant provision + 6-digit force-password,
+book→list→cancel, concurrency (N→1×201), daily overview, invoices/mine,
+voice smoke. Interactive runner prompts for platform/tenant admin and
+mutation skips. Playwright UI still backlog.
+
 ### test(func): live S-FUNC suite for deployed env wiring (ADR-0045)
 
 Add `tests/functional/` + `scripts/run_functional.sh` — pytest against a

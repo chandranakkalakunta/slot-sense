@@ -121,12 +121,19 @@ R2 starts as a **documented checklist** until E2E automation exists.
 | F7 | Agent text book/cancel (if Vertex enabled in env) | P1 |
 | F8 | Voice turn (if STT/TTS enabled) | P2 |
 
-**Automated S-FUNC (live env, API + SPA scrape):** `tests/functional/`  
-Run: `./scripts/run_functional.sh` (see `tests/functional/README.md`).  
-Covers env-wiring failures (SPA `projectId` / `VITE_BASE_DOMAIN`, Redis
-`LOCK_UNAVAILABLE`, Vertex disabled, horizon, host isolation) that hermetic
-unit tests cannot see. Browser Playwright journeys F1–F5 remain backlog;
-this pack is the **first automated S-FUNC gate** for promote-to-test.
+**Automated S-FUNC (live env, API + SPA scrape):** `tests/functional/` (~25 tests)  
+Run: `./scripts/run_functional.sh` (interactive prompts + defaults).  
+
+| Area | Coverage |
+|---|---|
+| Env wiring | SPA projectId / `VITE_BASE_DOMAIN`, health build meta, TLS, host isolation |
+| Booking | availability, horizon, Redis lock, book→cancel, concurrency N→1 |
+| Admin | facility catalog CRUD, create tenant + temp password + force-change |
+| Tenant admin | daily overview (resident forbidden) |
+| Agent | text (Vertex not fallback-only); voice optional |
+| Identity | `/users/me` |
+
+Browser Playwright remains backlog for pure UI journeys.
 
 ### 2.4 Performance suite
 
