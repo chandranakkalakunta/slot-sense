@@ -48,13 +48,40 @@
    make env-hold ENV=test-03 DAYS=1 REASON="soak test"
    ```
 
-3. **Warm API** (optional but recommended for stable p95):
+3. **Warm + latency profile** (recommended for ~1s p95 target under soak):
+
+   Cloud Run only scales past 1 instance when concurrent requests approach
+   `containerConcurrency`. A light soak with concurrency=80 stays on **one**
+   instance and p95 climbs to ~3s. For soak/perf days on **test only**:
 
    ```bash
-   # temporary warm instance for soak day
+   # Low latency profile (test-03): always-on CPU, early scale-out, min 2
    gcloud run services update sport-slot-api \
      --project=slot-sense-test-03 --region=asia-south1 \
-     --min-instances=1
+     --min-instances=2 \
+     --max-instances=10 \
+     --concurrency=10 \
+     --cpu=2 \
+     --memory=1Gi \
+     --no-cpu-throttling \
+     --cpu-boost
+
+   # After soak — cheaper idle (optional)
+   gcloud run services update sport-slot-api \
+     --project=slot-sense-test-03 --region=asia-south1 \
+     --min-instances=0 \
+     --concurrency=80 \
+     --cpu=1 \
+     --memory=512Mi \
+     --cpu-throttling
+   ```
+
+   Verify:
+
+   ```bash
+   gcloud run services describe sport-slot-api \
+     --project=slot-sense-test-03 --region=asia-south1 \
+     --format='yaml(spec.template.metadata.annotations,spec.template.spec.containerConcurrency,spec.template.spec.containers[0].resources)'
    ```
 
 4. **Auth ADC** for Firestore user sampling:
@@ -183,12 +210,46 @@ Report fields (excerpt):
 | `result` | Meaning |
 |----------|---------|
 | `PASS` | Exactly one `201` — winner email + `booking_id` + `slot_key` recorded |
-| `DOUBLE_BOOK` | Two+ `201`s for the same facility/date/start — **bug** |
+| `DOUBLE_BOOK` | Two+ `201`s for the same facility/date/start **before any cancel** — **product bug** |
 | `INCONCLUSIVE` | Zero `201`s (usually all `422 SLOT_NOT_BOOKABLE` because steady traffic took the slot first) — **not** a lock failure |
 
 ```bash
 jq '.contention.double_books, .cloud_run, .lock_proof' soak-report.json
 ```
+
+### Investigation note (2026-08-05 soak)
+
+One `DOUBLE_BOOK` was recorded on `azure-bay` / facility `0c1738f33c95` /
+`2026-08-07 18:00` with two different residents both receiving **201** and the
+**same** `booking_id`.
+
+**Root cause (harness, not concurrent confirmed occupancy):** lock-proof used to
+**cancel the winner inside the parallel wave**. Timeline:
+
+1. Resident A acquires Redis lock → creates confirmed booking → **201** → **cancels**
+2. Resident B then acquires lock → sees **cancelled** doc → allowed re-book
+   (`txn.set` on cancelled — intentional product behavior) → **201**
+3. Harness counted two 201s as DOUBLE_BOOK
+
+Product defenses (Redis `SET NX`, deterministic id, Firestore “confirmed →
+AlreadyBooked”) remain correct for **two simultaneous confirmed** bookings.
+Re-book after cancel is allowed by design.
+
+**Fix:** cancel only **after** the whole contention wave is scored (see
+`scripts/soak_test.py`). Re-run soak; any remaining DOUBLE_BOOK is real.
+
+### Latency guidance
+
+| Metric | Typical under soak (scaled) | Acceptable? |
+|--------|----------------------------|-------------|
+| p50 | ~0.5–0.8s | Yes for multi-step booking |
+| p95 | ~1–2s with 2–5 instances | **Target ≤1s** for flash UX; ≤2s OK for test soak |
+| p99 / max | 3–12s | Tail from cold start of new instances, queueing, Firestore |
+
+**Why max ~11s appeared:** Cloud Run scaled 2→5; new instances pay cold-start
++ first-request cost while other requests queue. Not the same as steady p50.
+Reduce tail with higher `min-instances` during soak (e.g. 4–5) or accept rare
+cold tails when scaling out.
 
 ---
 
