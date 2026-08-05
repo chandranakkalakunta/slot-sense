@@ -479,20 +479,23 @@ def main() -> int:
                 plan.members_per_flat = plan.members_per_flat[: plan.n_flats]
                 plan.facilities_per_type = _tier_facilities_per_type(plan.n_flats)
 
-        # Smoke → full: replan size; keep tenant_id; clear complete so work continues
-        if args.expand_to_full:
+        # Smoke leftovers: complete=true but only a few flats (e.g. max-flats=5).
+        # Full tenants have n_flats >= 250. Auto-expand those so re-runs continue
+        # without requiring the user to remember --expand-to-full mid-way.
+        smoke_leftover = plan.complete and plan.n_flats < 250
+        if args.expand_to_full or smoke_leftover:
             old_flats, old_users = plan.n_flats, plan.users_done
             full = _plan_tenant(slug, name, plan.tenant_id, rng)
             plan.n_flats = full.n_flats
             plan.members_per_flat = full.members_per_flat
             plan.facilities_per_type = full.facilities_per_type
             plan.complete = False
-            # Continue from previous users_done only if structure unchanged; after
-            # replan, rebuild from 0 with NEW emails (counter continues). Old users stay.
+            # After replan, recreate user list from 0 with NEW emails (counter continues).
             plan.users_done = 0
-            plan.facilities_done = False  # scale facilities to new tier
+            plan.facilities_done = False
+            why = "expand-to-full" if args.expand_to_full else "auto (smoke leftover complete+n_flats<250)"
             print(
-                f"[seed] EXPAND {slug}: {old_flats} flats / {old_users} users_done "
+                f"[seed] EXPAND {slug} ({why}): {old_flats} flats / {old_users} users_done "
                 f"→ {plan.n_flats} flats / ~{_total_users(plan)} members "
                 f"(existing Auth users kept; new emails from counter)"
             )
@@ -502,16 +505,21 @@ def main() -> int:
 
         plans.append(plan)
 
+    # Persist expanded plans for ALL tenants immediately so a crash mid-run
+    # does not leave remaining tenants stuck as complete smoke leftovers.
+    for plan in plans:
+        state["tenants"][plan.slug] = asdict(plan)
+    _save_state(args.state_file, state)
+
     total_planned = sum(_total_users(p) for p in plans)
     print(f"[seed] 20 tenants planned; ~{total_planned} residents (before max-users caps)")
     n_complete = sum(1 for p in plans if p.complete)
-    if n_complete == 20 and not args.expand_to_full:
+    n_todo = 20 - n_complete
+    print(f"[seed] status: complete={n_complete} remaining={n_todo} global_counter={state['global_counter']}")
+    if n_complete == 20:
         print(
-            "[seed] NOTE: all 20 tenants are complete=true — nothing to do.\n"
-            "  This usually means a prior SMOKE run (--max-flats / --max-users-per-tenant).\n"
-            "  For full 250–2000 flats population, re-run with:\n"
-            "    --expand-to-full\n"
-            "  Or delete .seed-test-population-state.json and re-run without smoke caps."
+            "[seed] NOTE: all 20 tenants are complete with full-size plans — nothing left to seed.\n"
+            "  To force another pass: --expand-to-full (replan) or edit state complete flags."
         )
 
     for plan in plans:

@@ -63,27 +63,37 @@ instances does **not** speed the seeder. If Auth quota errors appear, lower
 `--workers` to 16; if stable, try 48–64.
 
 Interrupt anytime; re-run the same command to **resume** (state file).
-### “All tenants SKIP complete” after a smoke run
+### “All tenants SKIP complete” / only first few full-size
 
-Smoke uses `--max-flats` / `--max-users-per-tenant` and marks each tenant
-`complete=true` with a **small** plan (e.g. 5 flats). A later full run
-without flags **skips** those tenants — it is not stuck on “20 tenants”.
+**Cause:** Smoke (`--max-flats 5`) marks `complete=true` with small plans.
+A full expand may finish some tenants then stop; remaining stay smoke+complete
+and get **SKIP** on the next plain re-run.
 
-**Expand smoke → full (keep existing users, continue counter):**
+**Your state often looks like:**
+
+- 4 tenants: `n_flats` ~1500, `users_done` ~6000, complete  
+- 16 tenants: `n_flats` = 5, `users_done` ~20, complete → **skipped forever**
+
+**Continue (recommended):**
 
 ```bash
 cd backend
+# workers 16 is safer for Auth quota (48 often rate-limits)
 uv run python ../scripts/seed_test_population.py \
   --project slot-sense-test-03 \
-  --expand-to-full \
+  --workers 16 \
+  --chunk-size 200 \
   --set-min-instances 0
 ```
 
-**Start planning from scratch** (loses resume progress; Auth users remain):
+The seeder **auto-expands** any tenant with `complete=true` and `n_flats < 250`
+(smoke leftover). No need to pass `--expand-to-full` for that case.
+
+**Force replan everyone:**
 
 ```bash
-rm -f .seed-test-population-state.json
-uv run python ../scripts/seed_test_population.py --project slot-sense-test-03
+uv run python ../scripts/seed_test_population.py \
+  --project slot-sense-test-03 --expand-to-full --workers 16
 ```
 
 ## Terraform (min instances, durable)
