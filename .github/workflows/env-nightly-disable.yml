@@ -1,0 +1,126 @@
+# ADR-0047 — Nightly environment power-off (FinOps)
+#
+# At 23:00 Asia/Kolkata, disable every registry env with nightly_disable=true
+# unless a hold is active or ENV_POWER_NIGHTLY_DISABLED=true.
+#
+# Requires terraform apply of env_power.tf (Redis admin + state bucket IAM)
+# on each project so the WIF principal can act.
+#
+# Kill-switch: repo variable ENV_POWER_NIGHTLY_DISABLED=true
+# Manual: workflow_dispatch with optional single env
+
+name: Env nightly disable
+
+on:
+  schedule:
+    # 23:00 Asia/Kolkata = 17:30 UTC
+    - cron: "30 17 * * *"
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Single env key (empty = all nightly_disable=true)"
+        required: false
+        type: string
+        default: ""
+      force:
+        description: "Ignore hold (true/false) — use rarely"
+        required: false
+        type: string
+        default: "false"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      skip_all: ${{ steps.build.outputs.skip_all }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: build
+        name: Build disable matrix from infrastructure/env-power.json
+        run: |
+          set -euo pipefail
+          if [[ "${{ vars.ENV_POWER_NIGHTLY_DISABLED }}" == "true" ]]; then
+            echo "skip_all=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            echo "Global kill-switch ENV_POWER_NIGHTLY_DISABLED=true — skipping"
+            exit 0
+          fi
+
+          REG=infrastructure/env-power.json
+          DEPLOY=.github/deploy-environments.json
+          ONLY="${{ inputs.env }}"
+
+          # Map env-power short name → project_id; attach WIF from deploy registry when present
+          include="$(jq -c --arg only "$ONLY" '
+            .environments
+            | to_entries
+            | map(select(.value.nightly_disable == true))
+            | map(select($only == "" or .key == $only))
+            | map({
+                env: .key,
+                project_id: .value.project_id,
+                project_number: (.value.project_number // ""),
+                region: "asia-south1"
+              })
+          ' "$REG")"
+
+          # Enrich project_number from deploy-environments when missing
+          if [[ -f "$DEPLOY" ]]; then
+            include="$(jq -c --argjson inc "$include" --slurpfile d "$DEPLOY" '
+              $inc | map(
+                . as $row
+                | ($d[0] | to_entries | map(.value) | map(select(.project_id == $row.project_id)) | .[0]) as $dep
+                | $row
+                | .project_number = (if .project_number != "" and .project_number != null then .project_number else ($dep.project_number // "") end)
+              )
+            ')"
+          fi
+
+          # Drop rows without project_number (cannot build WIF)
+          include="$(echo "$include" | jq -c '[.[] | select(.project_number != "" and .project_number != null)]')"
+          count="$(echo "$include" | jq 'length')"
+          echo "Envs to disable: $(echo "$include" | jq -r '.[].env' | tr '\n' ' ')"
+          echo "matrix=$(jq -nc --argjson inc "$include" '{include:$inc}')" >> "$GITHUB_OUTPUT"
+          if [[ "$count" -eq 0 ]]; then
+            echo "skip_all=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_all=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  disable:
+    needs: plan
+    if: needs.plan.outputs.skip_all != 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/${{ matrix.project_number }}/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Disable environment
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/env-power.sh
+          # hold is honored inside disable when reason=nightly
+          if [[ "${FORCE}" == "true" ]]; then
+            echo "FORCE=true — clearing hold first"
+            scripts/env-power.sh release-hold --env "${{ matrix.env }}" || true
+          fi
+          scripts/env-power.sh disable --env "${{ matrix.env }}" --yes --reason nightly
+          scripts/env-power.sh status --env "${{ matrix.env }}" || true

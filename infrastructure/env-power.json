@@ -1,0 +1,44 @@
+{
+  "timezone": "Asia/Kolkata",
+  "nightly_disable_cron_utc": "30 17 * * *",
+  "defaults": {
+    "region": "asia-south1",
+    "redis_instance": "sport-slot-redis",
+    "cloud_run_service": "sport-slot-api",
+    "redis_secret": "redis-auth",
+    "on_min_instances": 0,
+    "power_bucket_suffix": "env-power"
+  },
+  "environments": {
+    "dev": {
+      "project_id": "sport-slot-dev",
+      "project_number": "707808711911",
+      "nightly_disable": true,
+      "base_domain": "slotsense.chandraailabs.com",
+      "health_url": "https://admin.slotsense.chandraailabs.com/health",
+      "on_min_instances": 0
+    },
+    "dev-03": {
+      "project_id": "slot-sense-dev-03",
+      "nightly_disable": true,
+      "base_domain": "slotsense-dev.chandraailabs.com",
+      "health_url": "https://admin.slotsense-dev.chandraailabs.com/health",
+      "on_min_instances": 0
+    },
+    "test-01": {
+      "project_id": "slot-sense-test-01",
+      "nightly_disable": true,
+      "base_domain": "slotsense-test.chandraailabs.com",
+      "health_url": "https://admin.slotsense-test.chandraailabs.com/health",
+      "on_min_instances": 0
+    },
+    "test-03": {
+      "project_id": "slot-sense-test-03",
+      "project_number": "476524854130",
+      "nightly_disable": true,
+      "base_domain": "slotsense-test.chandraailabs.com",
+      "health_url": "https://admin.slotsense-test.chandraailabs.com/health",
+      "on_min_instances": 0
+    }
+  }
+}

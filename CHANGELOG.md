@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### feat(finops): environment power control (ADR-0047)
+
+Sleep/wake GCP envs to cut fixed cost (especially Memorystore Redis):
+`scripts/env-power.sh` + Makefile (`env-enable` / `env-disable` / `env-hold`),
+registry `infrastructure/env-power.json`, state/hold in
+`gs://<project>-env-power/`, nightly GHA at 23:00 Asia/Kolkata, Terraform
+IAM + bucket (`terraform/env_power.tf`). Runbook:
+`docs/runbooks/env-power.md`. Residual LB cost while off is expected.
+
 ### feat(test-env): multi-tenant population seeder + warm Cloud Run
 
 `scripts/seed_test_population.py` seeds 20 tenants (incl. marina-skies/rvrg),

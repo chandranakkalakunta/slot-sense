@@ -66,6 +66,34 @@ gcp-set-dev: ## Switch to sport-slot-dev project
 	@bash scripts/gcp-set-dev.sh
 
 # ═══════════════════════════════════════════════════════════════
+# Env power (ADR-0047 FinOps sleep/wake)
+# ═══════════════════════════════════════════════════════════════
+
+.PHONY: env-list
+env-list: ## List env power status for all registry envs
+	@bash scripts/env-power.sh list
+
+.PHONY: env-status
+env-status: ## Power status — make env-status ENV=test-03
+	@bash scripts/env-power.sh status --env $(ENV)
+
+.PHONY: env-enable
+env-enable: ## Wake env (Redis recreate may take 10–20m) — make env-enable ENV=test-03
+	@bash scripts/env-power.sh enable --env $(ENV) --yes
+
+.PHONY: env-disable
+env-disable: ## Sleep env (delete Redis, min=0) — make env-disable ENV=test-03
+	@bash scripts/env-power.sh disable --env $(ENV) --yes
+
+.PHONY: env-hold
+env-hold: ## Hold nightly disable — make env-hold ENV=test-03 DAYS=1 REASON="soak"
+	@bash scripts/env-power.sh hold --env $(ENV) --days $(DAYS) --reason "$(or $(REASON),hold)"
+
+.PHONY: env-release-hold
+env-release-hold: ## Clear nightly hold — make env-release-hold ENV=test-03
+	@bash scripts/env-power.sh release-hold --env $(ENV)
+
+# ═══════════════════════════════════════════════════════════════
 # Development
 # ═══════════════════════════════════════════════════════════════
 
