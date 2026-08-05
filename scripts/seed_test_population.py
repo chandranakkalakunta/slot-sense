@@ -31,6 +31,7 @@ import random
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -255,7 +256,11 @@ def _create_resident(
     password: str,
     dry_run: bool,
 ) -> str | None:
-    """Create Auth user + profile with final password (no temp / no welcome)."""
+    """Create Auth user + profile with final password (no temp / no welcome).
+
+    Safe to call from a thread pool (Firebase Admin + Firestore clients are
+    thread-safe for concurrent create/update).
+    """
     if dry_run:
         return "dry-run-uid"
     hid = f"h-{flat_number}"
@@ -269,7 +274,6 @@ def _create_resident(
     except fb_auth.EmailAlreadyExistsError:
         user = fb_auth.get_user_by_email(email)
         fb_auth.update_user(user.uid, password=password, disabled=False)
-        # refresh claims/profile below
 
     fb_auth.set_custom_user_claims(
         user.uid,
@@ -298,6 +302,45 @@ def _create_resident(
         merge=True,
     )
     return user.uid
+
+
+def _create_residents_parallel(
+    db: firestore.Client,
+    *,
+    jobs: list[dict],
+    password: str,
+    dry_run: bool,
+    workers: int,
+) -> tuple[int, int]:
+    """Create many residents concurrently. Returns (ok, failed)."""
+    if dry_run:
+        return len(jobs), 0
+    ok = failed = 0
+    workers = max(1, min(workers, 64))
+
+    def _one(job: dict) -> None:
+        _create_resident(
+            db,
+            tenant_id=job["tenant_id"],
+            tenant_slug=job["tenant_slug"],
+            email=job["email"],
+            display_name=job["display_name"],
+            flat_number=job["flat_number"],
+            password=password,
+            dry_run=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(_one, j): j for j in jobs}
+        for fut in as_completed(futs):
+            job = futs[fut]
+            try:
+                fut.result()
+                ok += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                print(f"[seed] WARN user {job['email']}: {exc}")
+    return ok, failed
 
 
 def _plan_tenant(slug: str, display_name: str, tenant_id: str, rng: random.Random) -> TenantPlan:
@@ -373,6 +416,22 @@ def parse_args() -> argparse.Namespace:
         help="gcloud run update min instances after seed (0=skip)",
     )
     p.add_argument("--region", default="asia-south1")
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=32,
+        help=(
+            "Parallel Auth/Firestore creates (default 32). "
+            "Cloud Run does NOT speed seeding — this runs on your machine via Admin SDK. "
+            "Raise to 48–64 if stable; lower if you hit Auth quota errors."
+        ),
+    )
+    p.add_argument(
+        "--chunk-size",
+        type=int,
+        default=200,
+        help="Users submitted per parallel wave before state save (default 200)",
+    )
     return p.parse_args()
 
 
@@ -498,40 +557,67 @@ def main() -> int:
             slots = slots[: args.max_users_per_tenant]
 
         start_idx = plan.users_done
-        print(f"[seed] users progress {start_idx}/{len(slots)}")
+        remaining = len(slots) - start_idx
+        print(
+            f"[seed] users progress {start_idx}/{len(slots)} remaining={remaining} "
+            f"workers={args.workers} chunk={args.chunk_size}"
+        )
+        print(
+            "[seed] NOTE: seeding is laptop → Firebase Admin SDK (not Cloud Run). "
+            "min-instances only helps API latency, not this script."
+        )
 
-        for idx in range(start_idx, len(slots)):
-            flat, mi = slots[idx]
-            n = state["global_counter"]
-            email = f"{plan.slug}.resident.{n}@{EMAIL_DOMAIN}"
-            display = f"{plan.slug} Resident {n}"
-            try:
-                _create_resident(
-                    db,
-                    tenant_id=plan.tenant_id,
-                    tenant_slug=plan.slug,
-                    email=email,
-                    display_name=display,
-                    flat_number=flat,
-                    password=args.password,
-                    dry_run=args.dry_run,
+        chunk = max(1, args.chunk_size)
+        t_tenant0 = time.perf_counter()
+        created_ok = 0
+
+        for chunk_start in range(start_idx, len(slots), chunk):
+            chunk_end = min(len(slots), chunk_start + chunk)
+            jobs: list[dict] = []
+            # Pre-allocate global_counter numbers so parallel workers never collide
+            base_counter = state["global_counter"]
+            for offset, idx in enumerate(range(chunk_start, chunk_end)):
+                flat, _mi = slots[idx]
+                n = base_counter + offset
+                jobs.append(
+                    {
+                        "tenant_id": plan.tenant_id,
+                        "tenant_slug": plan.slug,
+                        "email": f"{plan.slug}.resident.{n}@{EMAIL_DOMAIN}",
+                        "display_name": f"{plan.slug} Resident {n}",
+                        "flat_number": flat,
+                    }
                 )
-            except Exception as exc:  # noqa: BLE001
-                print(f"[seed] WARN user {email}: {exc}")
-            state["global_counter"] = n + 1
-            plan.users_done = idx + 1
-            if (idx + 1) % 50 == 0 or idx + 1 == len(slots):
-                state["tenants"][plan.slug] = asdict(plan)
-                _save_state(args.state_file, state)
-                print(f"[seed] {plan.slug} users {plan.users_done}/{len(slots)} counter={state['global_counter']}")
-            # gentle pacing for Auth quotas
-            if not args.dry_run and (idx + 1) % 20 == 0:
-                time.sleep(0.5)
+            state["global_counter"] = base_counter + len(jobs)
 
+            t0 = time.perf_counter()
+            ok, failed = _create_residents_parallel(
+                db,
+                jobs=jobs,
+                password=args.password,
+                dry_run=args.dry_run,
+                workers=args.workers,
+            )
+            elapsed = time.perf_counter() - t0
+            rate = (ok + failed) / elapsed if elapsed > 0 else 0
+            created_ok += ok
+            plan.users_done = chunk_end
+            state["tenants"][plan.slug] = asdict(plan)
+            _save_state(args.state_file, state)
+            print(
+                f"[seed] {plan.slug} users {plan.users_done}/{len(slots)} "
+                f"chunk ok={ok} fail={failed} "
+                f"{rate:.1f} users/s counter={state['global_counter']}"
+            )
+
+        tenant_elapsed = time.perf_counter() - t_tenant0
+        print(
+            f"[seed] DONE tenant {plan.slug} "
+            f"(+{created_ok} creates in {tenant_elapsed/60:.1f} min)"
+        )
         plan.complete = True
         state["tenants"][plan.slug] = asdict(plan)
         _save_state(args.state_file, state)
-        print(f"[seed] DONE tenant {plan.slug}")
 
     print(f"\n[seed] finished. state={args.state_file} global_counter={state['global_counter']}")
     print(f"[seed] login password for seed residents: (see --password / state file)")
