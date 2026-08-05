@@ -162,8 +162,32 @@ Report fields (excerpt):
   "bookings_cancelled": 180,
   "active_tenant_count": 3,
   "rush": { "contenders": 40, "winners": 3 },
-  "lock_proof": { "ok": 5, "fail": 0 }
+  "lock_proof": { "ok": 5, "fail_double_book": 0, "inconclusive": 2 },
+  "contention": {
+    "double_book_count": 0,
+    "events": [
+      {
+        "result": "PASS",
+        "slot_key": "orchid-park/fac-…/2026-08-07/09:00",
+        "winners": [{ "email": "…@example.com", "booking_id": "fac-…_2026-08-07_09:00" }]
+      }
+    ],
+    "double_books": []
+  },
+  "cloud_run": { "min_instances": 1, "max_instances": 1 }
 }
+```
+
+**Reading contention:**
+
+| `result` | Meaning |
+|----------|---------|
+| `PASS` | Exactly one `201` — winner email + `booking_id` + `slot_key` recorded |
+| `DOUBLE_BOOK` | Two+ `201`s for the same facility/date/start — **bug** |
+| `INCONCLUSIVE` | Zero `201`s (usually all `422 SLOT_NOT_BOOKABLE` because steady traffic took the slot first) — **not** a lock failure |
+
+```bash
+jq '.contention.double_books, .cloud_run, .lock_proof' soak-report.json
 ```
 
 ---
