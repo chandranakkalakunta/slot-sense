@@ -62,22 +62,42 @@ class Metrics:
     status: collections.Counter = field(default_factory=collections.Counter)
     ops: collections.Counter = field(default_factory=collections.Counter)
     errors: collections.Counter = field(default_factory=collections.Counter)
+    api_codes: collections.Counter = field(default_factory=collections.Counter)
     rush_winners: int = 0
     rush_contenders: int = 0
     lock_proof_ok: int = 0
     lock_proof_fail: int = 0
+    lock_proof_inconclusive: int = 0
+    lock_proof_double: int = 0
     active_tenants: set[str] = field(default_factory=set)
     bookings_created: int = 0
     bookings_cancelled: int = 0
+    # Detailed contention outcomes (who won / double-book evidence)
+    contention_events: list[dict[str, Any]] = field(default_factory=list)
+    cloud_run_instances: list[dict[str, Any]] = field(default_factory=list)
+    started_at: str = ""
+    ended_at: str = ""
 
-    def record(self, op: str, status: int, ms: float, tenant: str = "") -> None:
+    def record(
+        self,
+        op: str,
+        status: int,
+        ms: float,
+        tenant: str = "",
+        api_code: str | None = None,
+    ) -> None:
         self.ops[op] += 1
         self.status[status] += 1
         self.latencies_ms.append(ms)
         if tenant:
             self.active_tenants.add(tenant)
+        if api_code:
+            self.api_codes[api_code] += 1
         if status >= 400:
-            self.errors[f"{op}:{status}"] += 1
+            key = f"{op}:{status}"
+            if api_code:
+                key = f"{op}:{status}:{api_code}"
+            self.errors[key] += 1
 
     def summary(self) -> dict[str, Any]:
         lats = sorted(self.latencies_ms)
@@ -87,10 +107,16 @@ class Metrics:
             i = min(len(lats) - 1, max(0, int(round((p / 100) * (len(lats) - 1)))))
             return round(lats[i], 1)
 
+        doubles = [e for e in self.contention_events if e.get("result") == "DOUBLE_BOOK"]
+        passes = [e for e in self.contention_events if e.get("result") == "PASS"]
+        inconclusive = [e for e in self.contention_events if e.get("result") == "INCONCLUSIVE"]
+        inst_vals = [x["instances"] for x in self.cloud_run_instances if x.get("instances") is not None]
+
         return {
             "ops": dict(self.ops),
             "status": {str(k): v for k, v in self.status.items()},
-            "errors_top": dict(self.errors.most_common(15)),
+            "api_codes": dict(self.api_codes.most_common(20)),
+            "errors_top": dict(self.errors.most_common(20)),
             "latency_ms": {
                 "n": len(lats),
                 "p50": pct(50),
@@ -107,7 +133,26 @@ class Metrics:
                 "contenders": self.rush_contenders,
                 "winners": self.rush_winners,
             },
-            "lock_proof": {"ok": self.lock_proof_ok, "fail": self.lock_proof_fail},
+            "lock_proof": {
+                "ok": self.lock_proof_ok,
+                "fail_double_book": self.lock_proof_double,
+                "inconclusive": self.lock_proof_inconclusive,
+                "fail_other": self.lock_proof_fail,
+            },
+            "contention": {
+                "pass_count": len(passes),
+                "double_book_count": len(doubles),
+                "inconclusive_count": len(inconclusive),
+                # Full detail: winner emails, booking_ids, slot keys
+                "events": self.contention_events,
+                "double_books": doubles,
+            },
+            "cloud_run": {
+                "samples": self.cloud_run_instances,
+                "min_instances": min(inst_vals) if inst_vals else None,
+                "max_instances": max(inst_vals) if inst_vals else None,
+            },
+            "window": {"started_at": self.started_at, "ended_at": self.ended_at},
         }
 
 
@@ -230,6 +275,17 @@ async def firebase_id_token(
     return r.json().get("idToken")
 
 
+def _api_code(body: Any) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    if body.get("code"):
+        return str(body["code"])
+    err = body.get("error")
+    if isinstance(err, dict) and err.get("code"):
+        return str(err["code"])
+    return None
+
+
 async def api(
     client: httpx.AsyncClient,
     metrics: Metrics,
@@ -253,17 +309,73 @@ async def api(
             timeout=45.0,
         )
         ms = (time.perf_counter() - t0) * 1000
-        metrics.record(op, r.status_code, ms, tenant)
         try:
             body = r.json()
         except Exception:
             body = None
+        metrics.record(op, r.status_code, ms, tenant, api_code=_api_code(body))
         return r.status_code, body
     except Exception as exc:  # noqa: BLE001
         ms = (time.perf_counter() - t0) * 1000
         metrics.record(op, 0, ms, tenant)
         metrics.errors[f"{op}:exc:{type(exc).__name__}"] += 1
         return 0, None
+
+
+async def sample_cloud_run_instances(project: str, region: str = "asia-south1") -> int | None:
+    """Best-effort instance count via Cloud Monitoring REST (last ~5 min max)."""
+    del region  # reserved for future revision-scoped queries
+    try:
+        proc2 = await asyncio.create_subprocess_exec(
+            "gcloud", "auth", "print-access-token",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc2.communicate()
+        token = out.decode().strip()
+        if not token:
+            return None
+        import urllib.parse
+        import urllib.request
+        from datetime import timezone as _tz
+
+        end = datetime.now(_tz.utc)
+        start = end - timedelta(minutes=5)
+        filt = (
+            'metric.type="run.googleapis.com/container/instance_count" '
+            'AND resource.type="cloud_run_revision" '
+            'AND resource.labels.service_name="sport-slot-api"'
+        )
+        q = urllib.parse.urlencode({
+            "filter": filt,
+            "interval.endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "interval.startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "aggregation.alignmentPeriod": "60s",
+            "aggregation.perSeriesAligner": "ALIGN_MAX",
+            "aggregation.crossSeriesReducer": "REDUCE_SUM",
+            "view": "FULL",
+        })
+        url = f"https://monitoring.googleapis.com/v3/projects/{project}/timeSeries?{q}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+
+        def _fetch() -> int | None:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                d = json.load(r)
+            best = 0
+            found = False
+            for ts in d.get("timeSeries") or []:
+                for p in ts.get("points") or []:
+                    found = True
+                    v = p.get("value", {})
+                    val = v.get("int64Value")
+                    if val is None:
+                        val = v.get("doubleValue") or 0
+                    best = max(best, int(float(val)))
+            return best if found else None
+
+        return await asyncio.to_thread(_fetch)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ── actors ────────────────────────────────────────────────────────────────
@@ -456,61 +568,123 @@ async def rush_flash(
     await asyncio.gather(*[one_tenant(s, g) for s, g in by_tenant.items()])
 
 
+# Serialize lock-proof waves so 12 workers don't stampede the same slot.
+_LOCK_PROOF_GATE = asyncio.Lock()
+
+
 async def lock_proof_wave(
     client: httpx.AsyncClient,
     metrics: Metrics,
     actors: list[Actor],
     n: int = 12,
 ) -> None:
-    """Classic N-parallel one-slot proof on one tenant."""
+    """Classic N-parallel one-slot proof on one tenant.
+
+    Records who won (email + booking_id + slot). Classifies:
+      PASS          — exactly one 201
+      DOUBLE_BOOK   — two or more 201s for the same facility/date/start
+      INCONCLUSIVE  — zero 201s (usually all 422: slot already taken by steady traffic)
+    """
     if len(actors) < 2:
         return
-    # Use multiple actors from same tenant if possible
-    by_tenant: dict[str, list[Actor]] = collections.defaultdict(list)
-    for a in actors:
-        by_tenant[a.slug].append(a)
-    slug, group = max(by_tenant.items(), key=lambda kv: len(kv[1]))
-    group = group[: max(2, min(n, len(group)))]
-    lead = group[0]
-    if not lead.facility_ids:
-        await discover_facilities(client, metrics, lead)
-    if not lead.facility_ids:
-        return
-    fid = lead.facility_ids[0]
-    day = date.today() + timedelta(days=2)
-    start = await pick_bookable_slot(client, metrics, lead, fid, day)
-    if not start:
-        return
-    body = {"facility_id": fid, "date": day.isoformat(), "start": start}
+    if _LOCK_PROOF_GATE.locked():
+        return  # another wave in flight
+    async with _LOCK_PROOF_GATE:
+        by_tenant: dict[str, list[Actor]] = collections.defaultdict(list)
+        for a in actors:
+            by_tenant[a.slug].append(a)
+        slug, group = max(by_tenant.items(), key=lambda kv: len(kv[1]))
+        group = group[: max(2, min(n, len(group)))]
+        lead = group[0]
+        if not lead.facility_ids:
+            await discover_facilities(client, metrics, lead)
+        if not lead.facility_ids:
+            return
+        fid = lead.facility_ids[0]
+        day = date.today() + timedelta(days=2)
+        start = await pick_bookable_slot(client, metrics, lead, fid, day)
+        if not start:
+            return
+        slot_key = f"{slug}/{fid}/{day.isoformat()}/{start}"
+        body = {"facility_id": fid, "date": day.isoformat(), "start": start}
+        expected_booking_id = f"{fid}_{day.isoformat()}_{start}"
 
-    async def post(a: Actor) -> int:
-        code, resp = await api(
-            client, metrics,
-            origin=a.origin, method="POST", path="/api/v1/bookings",
-            token=a.token, op="lock_proof", tenant=a.slug,
-            json_body=body,
+        async def post(a: Actor) -> dict[str, Any]:
+            code, resp = await api(
+                client, metrics,
+                origin=a.origin, method="POST", path="/api/v1/bookings",
+                token=a.token, op="lock_proof", tenant=a.slug,
+                json_body=body,
+            )
+            bid = None
+            api_code = _api_code(resp)
+            if code == 201 and isinstance(resp, dict):
+                bid = resp.get("id") or resp.get("booking_id")
+                if bid:
+                    await api(
+                        client, metrics,
+                        origin=a.origin, method="POST",
+                        path=f"/api/v1/bookings/{bid}/cancel",
+                        token=a.token, op="lock_proof_cancel", tenant=a.slug,
+                    )
+                    metrics.bookings_cancelled += 1
+            return {
+                "email": a.email,
+                "status": code,
+                "api_code": api_code,
+                "booking_id": bid,
+            }
+
+        results = await asyncio.gather(*[post(a) for a in group])
+        winners = [r for r in results if r["status"] == 201]
+        codes = collections.Counter(r["status"] for r in results)
+        api_codes = collections.Counter(
+            r["api_code"] or f"HTTP_{r['status']}" for r in results
         )
-        if code == 201 and isinstance(resp, dict):
-            bid = resp.get("id") or resp.get("booking_id")
-            if bid:
-                # cancel to free slot for later waves
-                await api(
-                    client, metrics,
-                    origin=a.origin, method="POST",
-                    path=f"/api/v1/bookings/{bid}/cancel",
-                    token=a.token, op="lock_proof_cancel", tenant=a.slug,
-                )
-                metrics.bookings_cancelled += 1
-        return code
+        ts = datetime.now(TZ).isoformat()
 
-    codes = await asyncio.gather(*[post(a) for a in group])
-    winners = sum(1 for c in codes if c == 201)
-    if winners == 1:
-        metrics.lock_proof_ok += 1
-        log(f"lock_proof PASS tenant={slug} n={len(group)} winners=1")
-    else:
-        metrics.lock_proof_fail += 1
-        log(f"lock_proof FAIL tenant={slug} n={len(group)} winners={winners} {dict(collections.Counter(codes))}")
+        if len(winners) == 1:
+            metrics.lock_proof_ok += 1
+            result = "PASS"
+            log(
+                f"lock_proof PASS tenant={slug} slot={slot_key} "
+                f"winner={winners[0]['email']} booking_id={winners[0]['booking_id']} "
+                f"n={len(group)} losers={dict(codes)}"
+            )
+        elif len(winners) == 0:
+            metrics.lock_proof_inconclusive += 1
+            result = "INCONCLUSIVE"
+            log(
+                f"lock_proof INCONCLUSIVE tenant={slug} slot={slot_key} "
+                f"winners=0 n={len(group)} statuses={dict(codes)} "
+                f"api_codes={dict(api_codes)} (slot likely taken by steady traffic)"
+            )
+        else:
+            metrics.lock_proof_double += 1
+            result = "DOUBLE_BOOK"
+            log(
+                f"lock_proof DOUBLE_BOOK tenant={slug} slot={slot_key} "
+                f"winners={len(winners)} expected_id={expected_booking_id} "
+                f"winner_emails={[w['email'] for w in winners]} "
+                f"booking_ids={[w['booking_id'] for w in winners]}"
+            )
+
+        metrics.contention_events.append({
+            "kind": "lock_proof",
+            "ts": ts,
+            "result": result,
+            "tenant": slug,
+            "facility_id": fid,
+            "date": day.isoformat(),
+            "start": start,
+            "slot_key": slot_key,
+            "expected_booking_id": expected_booking_id,
+            "n_contenders": len(group),
+            "status_counts": dict(codes),
+            "api_code_counts": dict(api_codes),
+            "winners": winners,
+            "all_results": results,
+        })
 
 
 async def wait_until_local(hhmm: str) -> None:
@@ -568,6 +742,7 @@ async def async_main(args: argparse.Namespace) -> int:
         return 1
 
     metrics = Metrics()
+    metrics.started_at = datetime.now(TZ).isoformat()
     password = args.password
     api_key = args.firebase_api_key
 
@@ -617,8 +792,20 @@ async def async_main(args: argparse.Namespace) -> int:
         # Steady soak loop
         end = time.monotonic() + duration_s
         tick = 0
-        rng = random.Random(args.seed)
+        last_instance_sample = 0.0
         log(f"steady traffic for {args.duration} (workers={args.workers})…")
+
+        async def sample_instances_loop() -> None:
+            nonlocal last_instance_sample
+            while time.monotonic() < end:
+                n = await sample_cloud_run_instances(args.project)
+                metrics.cloud_run_instances.append({
+                    "ts": datetime.now(TZ).isoformat(),
+                    "instances": n,
+                })
+                if n is not None:
+                    log(f"cloud_run instances≈{n}")
+                await asyncio.sleep(60)
 
         async def worker(wid: int) -> None:
             nonlocal tick
@@ -627,22 +814,26 @@ async def async_main(args: argparse.Namespace) -> int:
                 actor = local.choice(actors)
                 await steady_tick(client, metrics, actor, local)
                 tick += 1
-                # light pacing
                 await asyncio.sleep(args.pace_ms / 1000.0)
-                if tick % 50 == 0:
+                if tick % 50 == 0 and wid == 0:
                     s = metrics.summary()
                     log(
                         f"progress ops={s['latency_ms']['n']} "
                         f"p95={s['latency_ms']['p95']}ms "
                         f"tenants={s['active_tenant_count']} "
                         f"created={s['bookings_created']} cancelled={s['bookings_cancelled']} "
-                        f"5xx={sum(v for k,v in metrics.status.items() if k >= 500)}"
+                        f"5xx={sum(v for k,v in metrics.status.items() if k >= 500)} "
+                        f"double={metrics.lock_proof_double} "
+                        f"lock_ok={metrics.lock_proof_ok}"
                     )
-                # periodic lock proof
-                if tick > 0 and tick % args.lock_proof_every == 0:
+                # Only worker 0 triggers lock proof (avoids 12 parallel waves)
+                if wid == 0 and tick > 0 and tick % args.lock_proof_every == 0:
                     await lock_proof_wave(client, metrics, actors, n=args.lock_proof_n)
 
-        await asyncio.gather(*[worker(i) for i in range(args.workers)])
+        await asyncio.gather(
+            sample_instances_loop(),
+            *[worker(i) for i in range(args.workers)],
+        )
 
         # Final rush if scheduled at end of soak and not yet done
         if args.rush_at_end and not rush_done:
@@ -655,6 +846,14 @@ async def async_main(args: argparse.Namespace) -> int:
 
         # Final lock proof
         await lock_proof_wave(client, metrics, actors, n=args.lock_proof_n)
+
+    metrics.ended_at = datetime.now(TZ).isoformat()
+    # Final instance sample
+    n_final = await sample_cloud_run_instances(args.project)
+    metrics.cloud_run_instances.append({
+        "ts": metrics.ended_at,
+        "instances": n_final,
+    })
 
     summary = metrics.summary()
     summary["config"] = {
@@ -679,12 +878,21 @@ async def async_main(args: argparse.Namespace) -> int:
         # only half of target ever touched — hard fail
         log(f"FAIL: tenant coverage {actual_pct:.0f}% << target {args.tenant_pct}%")
         return 1
-    if metrics.lock_proof_fail > 0 and metrics.lock_proof_ok == 0 and metrics.lock_proof_fail >= 2:
-        log("FAIL: lock proof never passed")
+    if metrics.lock_proof_double > 0:
+        log(
+            f"FAIL: double-book detected {metrics.lock_proof_double} time(s) — "
+            f"see contention.double_books in report"
+        )
+        return 1
+    if metrics.lock_proof_ok == 0 and metrics.lock_proof_inconclusive >= 2:
+        log("FAIL: lock proof never got a clean single winner")
         return 1
     log(
         f"DONE coverage={actual_pct:.0f}% p95={summary['latency_ms']['p95']}ms "
-        f"created={summary['bookings_created']} cancelled={summary['bookings_cancelled']}"
+        f"created={summary['bookings_created']} cancelled={summary['bookings_cancelled']} "
+        f"lock_ok={metrics.lock_proof_ok} double={metrics.lock_proof_double} "
+        f"inconclusive={metrics.lock_proof_inconclusive} "
+        f"cloud_run_max={summary['cloud_run']['max_instances']}"
     )
     return 0
 
