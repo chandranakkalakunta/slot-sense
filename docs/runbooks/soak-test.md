@@ -48,13 +48,40 @@
    make env-hold ENV=test-03 DAYS=1 REASON="soak test"
    ```
 
-3. **Warm API** (optional but recommended for stable p95):
+3. **Warm + latency profile** (recommended for ~1s p95 target under soak):
+
+   Cloud Run only scales past 1 instance when concurrent requests approach
+   `containerConcurrency`. A light soak with concurrency=80 stays on **one**
+   instance and p95 climbs to ~3s. For soak/perf days on **test only**:
 
    ```bash
-   # temporary warm instance for soak day
+   # Low latency profile (test-03): always-on CPU, early scale-out, min 2
    gcloud run services update sport-slot-api \
      --project=slot-sense-test-03 --region=asia-south1 \
-     --min-instances=1
+     --min-instances=2 \
+     --max-instances=10 \
+     --concurrency=10 \
+     --cpu=2 \
+     --memory=1Gi \
+     --no-cpu-throttling \
+     --cpu-boost
+
+   # After soak — cheaper idle (optional)
+   gcloud run services update sport-slot-api \
+     --project=slot-sense-test-03 --region=asia-south1 \
+     --min-instances=0 \
+     --concurrency=80 \
+     --cpu=1 \
+     --memory=512Mi \
+     --cpu-throttling
+   ```
+
+   Verify:
+
+   ```bash
+   gcloud run services describe sport-slot-api \
+     --project=slot-sense-test-03 --region=asia-south1 \
+     --format='yaml(spec.template.metadata.annotations,spec.template.spec.containerConcurrency,spec.template.spec.containers[0].resources)'
    ```
 
 4. **Auth ADC** for Firestore user sampling:
