@@ -245,6 +245,25 @@ def _create_facilities(
     return created
 
 
+def _is_transient_auth_error(exc: BaseException) -> bool:
+    """504 Deadline Exceeded / UNAVAILABLE / resource exhausted — retryable."""
+    msg = str(exc).lower()
+    needles = (
+        "504",
+        "deadline exceeded",
+        "unavailable",
+        "resource exhausted",
+        "quota",
+        "rate limit",
+        "too many requests",
+        "503",
+        "connection reset",
+        "timed out",
+        "timeout",
+    )
+    return any(n in msg for n in needles)
+
+
 def _create_resident(
     db: firestore.Client,
     *,
@@ -255,53 +274,68 @@ def _create_resident(
     flat_number: str,
     password: str,
     dry_run: bool,
+    retries: int = 5,
 ) -> str | None:
     """Create Auth user + profile with final password (no temp / no welcome).
 
     Safe to call from a thread pool (Firebase Admin + Firestore clients are
-    thread-safe for concurrent create/update).
+    thread-safe for concurrent create/update). Retries transient 504/quota.
     """
     if dry_run:
         return "dry-run-uid"
     hid = f"h-{flat_number}"
-    try:
-        user = fb_auth.create_user(
-            email=email,
-            password=password,
-            display_name=display_name,
-            email_verified=True,
-        )
-    except fb_auth.EmailAlreadyExistsError:
-        user = fb_auth.get_user_by_email(email)
-        fb_auth.update_user(user.uid, password=password, disabled=False)
+    last_exc: BaseException | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            try:
+                user = fb_auth.create_user(
+                    email=email,
+                    password=password,
+                    display_name=display_name,
+                    email_verified=True,
+                )
+            except fb_auth.EmailAlreadyExistsError:
+                user = fb_auth.get_user_by_email(email)
+                fb_auth.update_user(user.uid, password=password, disabled=False)
 
-    fb_auth.set_custom_user_claims(
-        user.uid,
-        {
-            "tenant_id": tenant_id,
-            "tenant_slug": tenant_slug,
-            "role": "resident",
-            "household_id": hid,
-        },
-    )
-    db.collection("tenants").document(tenant_id).collection("users").document(
-        user.uid
-    ).set(
-        {
-            "uid": user.uid,
-            "email": email,
-            "display_name": display_name,
-            "flat_number": flat_number,
-            "household_id": hid,
-            "role": "resident",
-            "must_change_password": False,
-            "temp_password_expires_at": None,
-            "seeded": True,
-            "created_at": datetime.now(timezone.utc),
-        },
-        merge=True,
-    )
-    return user.uid
+            fb_auth.set_custom_user_claims(
+                user.uid,
+                {
+                    "tenant_id": tenant_id,
+                    "tenant_slug": tenant_slug,
+                    "role": "resident",
+                    "household_id": hid,
+                },
+            )
+            db.collection("tenants").document(tenant_id).collection("users").document(
+                user.uid
+            ).set(
+                {
+                    "uid": user.uid,
+                    "email": email,
+                    "display_name": display_name,
+                    "flat_number": flat_number,
+                    "household_id": hid,
+                    "role": "resident",
+                    "must_change_password": False,
+                    "temp_password_expires_at": None,
+                    "seeded": True,
+                    "created_at": datetime.now(timezone.utc),
+                },
+                merge=True,
+            )
+            return user.uid
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < retries and _is_transient_auth_error(exc):
+                # Exponential backoff + jitter (Auth/Firestore transient)
+                delay = min(30.0, (2 ** (attempt - 1)) + random.random())
+                time.sleep(delay)
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    return None
 
 
 def _create_residents_parallel(
@@ -312,11 +346,16 @@ def _create_residents_parallel(
     dry_run: bool,
     workers: int,
 ) -> tuple[int, int]:
-    """Create many residents concurrently. Returns (ok, failed)."""
+    """Create many residents concurrently. Returns (ok, failed).
+
+    Failed jobs (after per-user retries) are attempted once more serially at
+    the end of the wave so 504s under load do not leave permanent holes.
+    """
     if dry_run:
         return len(jobs), 0
     ok = failed = 0
     workers = max(1, min(workers, 64))
+    retry_jobs: list[dict] = []
 
     def _one(job: dict) -> None:
         _create_resident(
@@ -338,10 +377,25 @@ def _create_residents_parallel(
                 fut.result()
                 ok += 1
             except Exception as exc:  # noqa: BLE001
-                failed += 1
-                print(f"[seed] WARN user {job['email']}: {exc}")
-    return ok, failed
+                if _is_transient_auth_error(exc):
+                    retry_jobs.append(job)
+                    print(f"[seed] RETRY-QUEUE {job['email']}: {exc}")
+                else:
+                    failed += 1
+                    print(f"[seed] WARN user {job['email']}: {exc}")
 
+    if retry_jobs:
+        print(f"[seed] serial retry of {len(retry_jobs)} transient failures…")
+        time.sleep(2.0)
+        for job in retry_jobs:
+            try:
+                _one(job)
+                ok += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                print(f"[seed] WARN user {job['email']} (after retry): {exc}")
+
+    return ok, failed
 
 def _plan_tenant(slug: str, display_name: str, tenant_id: str, rng: random.Random) -> TenantPlan:
     n_flats = rng.randint(250, 2000)
