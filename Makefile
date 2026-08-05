@@ -94,6 +94,21 @@ env-release-hold: ## Clear nightly hold — make env-release-hold ENV=test-03
 	@bash scripts/env-power.sh release-hold --env $(ENV)
 
 # ═══════════════════════════════════════════════════════════════
+# Soak / load (test env only) — docs/runbooks/soak-test.md
+# ═══════════════════════════════════════════════════════════════
+
+.PHONY: soak-test
+soak-test: ## Soak test-03 — make soak-test [DURATION=30m] [RUSH=--rush-now]
+	@cd backend && uv run python ../scripts/soak_test.py \
+		--project slot-sense-test-03 \
+		--base-domain slotsense-test.chandraailabs.com \
+		--duration $(or $(DURATION),30m) \
+		--tenant-pct $(or $(TENANT_PCT),15) \
+		--workers $(or $(WORKERS),12) \
+		$(or $(RUSH),--rush-now) \
+		--report ../soak-report.json
+
+# ═══════════════════════════════════════════════════════════════
 # Development
 # ═══════════════════════════════════════════════════════════════
 
