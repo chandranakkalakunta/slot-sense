@@ -23,7 +23,13 @@ export default function Facilities() {
   const catalogBySport = new Map(catalogData?.items.map((c) => [c.sport, c.name]) ?? []);
 
   const activeFacilities = (data?.items.filter((f) => f.active) ?? [])
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .slice()
+    .sort((a, b) =>
+      (a.name ?? "").localeCompare(b.name ?? "", undefined, {
+        sensitivity: "base",
+        numeric: true,
+      }),
+    );
 
   return (
     <>

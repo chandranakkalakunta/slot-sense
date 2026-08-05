@@ -56,6 +56,27 @@ describe("TenantList", () => {
     expect(screen.getByText(/oakwood/)).toBeInTheDocument();
   });
 
+  it("lists tenants in natural A–Z display-name order", () => {
+    vi.mocked(useTenants).mockReturnValue({
+      data: {
+        items: [
+          { tenant_id: "t-p", slug: "palm-meadows", display_name: "Palm Meadows", active: true },
+          { tenant_id: "t-e", slug: "emerald-hills", display_name: "Emerald Hills Township", active: true },
+          { tenant_id: "t-z", slug: "prestige-oaks", display_name: "Prestige Oaks", active: true },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useTenants>);
+    renderPage();
+    const names = screen.getAllByText(/Township|Meadows|Oaks/).map((el) => el.textContent);
+    expect(names).toEqual([
+      "Emerald Hills Township",
+      "Palm Meadows",
+      "Prestige Oaks",
+    ]);
+  });
+
   it("shows loading state", () => {
     vi.mocked(useTenants).mockReturnValue({
       data: undefined, isLoading: true, error: null,

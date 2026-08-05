@@ -14,10 +14,16 @@ export function ListRow({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-lg border bg-card p-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3", className)}>
-      <div className="min-w-0 flex-1">{children}</div>
+    <div
+      className={cn(
+        // Compact standard list row (Phase 10.6g density): less padding, tighter gaps
+        "rounded-md border bg-card px-3 py-1.5 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3",
+        className,
+      )}
+    >
+      <div className="min-w-0 flex-1 leading-snug">{children}</div>
       {action && (
-        <div className={cn("flex flex-wrap items-center gap-2 sm:shrink-0", actionClassName)}>
+        <div className={cn("flex flex-wrap items-center gap-1.5 sm:shrink-0", actionClassName)}>
           {action}
         </div>
       )}

@@ -27,6 +27,7 @@ import {
 } from "../../hooks/tenantAdminHooks";
 import { ApiClientError } from "../../lib/api";
 import { messageForCode } from "../../lib/messages";
+import { compareByName } from "../../lib/sort";
 import type { WeeklySchedule } from "../../types/facilitySchedule";
 
 function rupeesToPaise(value: string): number | undefined {
@@ -159,36 +160,35 @@ export default function TenantFacilities() {
   const catalogMap = new Map(catalog?.items.map((c) => [c.type_id, c.name]) ?? []);
 
   const activeFacilities = (facilities?.items.filter((f) => f.active) ?? [])
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .slice()
+    .sort(compareByName);
 
   return (
     <>
       <AppHeader />
-      <main className="mx-auto max-w-6xl px-4 py-6 space-y-6">
+      <main className="mx-auto max-w-4xl px-4 py-5 space-y-4">
         <Link to="/tenant" className="block text-sm font-medium text-link underline underline-offset-2 hover:text-link/70">← Dashboard</Link>
-        <h1 className="text-2xl font-semibold text-foreground">Facilities</h1>
+        <h1 className="text-xl font-semibold text-foreground">Facilities</h1>
 
         {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
-        {/* Facility list */}
-        <div className="space-y-2">
+        {/* Facility list — name order (numeric-aware: Court 2 before Court 10) */}
+        <div className="space-y-1">
           {activeFacilities.map((f) => (
             <ListRow
               key={f.id}
               action={
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <Button
                     variant="outline"
-                    size="sm"
-                    className="flex-1 sm:flex-none"
+                    size="xs"
                     onClick={() => openEdit(f)}
                   >
                     Edit
                   </Button>
                   <Button
                     variant="outline"
-                    size="sm"
-                    className="flex-1 sm:flex-none"
+                    size="xs"
                     onClick={() => openClone(f)}
                   >
                     Clone
@@ -196,8 +196,8 @@ export default function TenantFacilities() {
                   {/* De-emphasized trigger per ADR-0028 §5; ConfirmDialog confirms before mutate */}
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="flex-1 sm:flex-none text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    size="xs"
+                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                     onClick={() => setConfirmFacilityId(f.id)}
                   >
                     Remove
@@ -205,8 +205,8 @@ export default function TenantFacilities() {
                 </div>
               }
             >
-              <p className="font-semibold text-foreground">{f.name}</p>
-              <p className="text-sm text-muted-foreground tabular-nums mt-0.5">
+              <p className="text-sm font-medium text-foreground">{f.name}</p>
+              <p className="text-xs text-muted-foreground tabular-nums">
                 {catalogMap.get(f.facility_type_id) ?? f.sport} · {f.slot_duration_minutes}min slots
                 {" · "}
                 {f.price_paise != null ? `₹${(f.price_paise / 100).toFixed(2)}` : "No price set"}

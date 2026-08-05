@@ -6,6 +6,7 @@ import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { type Credential } from "../../components/CredentialDisplay";
 import { Input } from "../../components/ui/input";
+import { ListRow } from "../../components/ListRow";
 import { TempPasswordModal } from "../../components/TempPasswordModal";
 import {
   useBulkCreateUsers, useCreateTenantUser,
@@ -13,6 +14,7 @@ import {
 } from "../../hooks/tenantAdminHooks";
 import { ApiClientError } from "../../lib/api";
 import { messageForCode } from "../../lib/messages";
+import { compareUsers } from "../../lib/sort";
 
 // Minimal CSV parser — splits on newlines and commas; first row = header.
 // Note: quoted fields containing commas are NOT handled (acceptable for v1).
@@ -113,15 +115,18 @@ export default function TenantUsers() {
 
   const active = data?.items.filter((u) => u.active !== false) ?? [];
 
-  const filtered = active.filter((u) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      u.display_name.toLowerCase().includes(q) ||
-      u.email.toLowerCase().includes(q) ||
-      (u.flat_number ?? "").toLowerCase().includes(q)
-    );
-  });
+  const filtered = active
+    .filter((u) => {
+      if (!search) return true;
+      const q = search.toLowerCase();
+      return (
+        u.display_name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        (u.flat_number ?? "").toLowerCase().includes(q)
+      );
+    })
+    .slice()
+    .sort(compareUsers);
 
   const bulkCreated = bulkReport?.results.filter((r) => r.status === "created") ?? [];
   const bulkFailed = bulkReport?.results.filter((r) => r.status !== "created") ?? [];
@@ -129,13 +134,13 @@ export default function TenantUsers() {
   return (
     <>
       <AppHeader />
-      <main className="mx-auto max-w-6xl px-4 py-6 space-y-8">
+      <main className="mx-auto max-w-4xl px-4 py-5 space-y-5">
         <Link to="/tenant" className="block text-sm font-medium text-link underline underline-offset-2 hover:text-link/70">← Dashboard</Link>
-        <h1 className="text-2xl font-semibold text-foreground">Residents &amp; Admins</h1>
+        <h1 className="text-xl font-semibold text-foreground">Residents &amp; Admins</h1>
 
         {/* User list */}
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold text-foreground">Active users</h2>
+        <section className="space-y-2">
+          <h2 className="text-base font-semibold text-foreground">Active users</h2>
           {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
           {/* Search — client-side filter of the current page only */}
@@ -144,7 +149,7 @@ export default function TenantUsers() {
               placeholder="Search by name, email or flat…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="max-w-sm"
+              className="max-w-md h-8"
               aria-label="Search users"
             />
           )}
@@ -155,46 +160,45 @@ export default function TenantUsers() {
           {active.length > 0 && filtered.length === 0 && (
             <p className="text-sm text-muted-foreground">No users match "{search}".</p>
           )}
-          <div className="space-y-2">
+          <div className="space-y-1">
             {filtered.map((u) => (
-              /* Two-button row: info on top, buttons stacked below on mobile; inline on sm+ */
-              <div key={u.uid} className="rounded-lg border bg-card p-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-                <div className="min-w-0">
-                  <p className="font-semibold text-foreground">{u.display_name}</p>
-                  <p className="text-sm text-muted-foreground mt-0.5">
-                    {u.email} · {u.role}{u.flat_number ? ` · ${u.flat_number}` : ""}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2 sm:shrink-0">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1 sm:flex-none min-h-[40px]"
-                    onClick={() => handleReset(u.uid, u.email)}
-                    disabled={resetPw.isPending}
-                  >
-                    Issue temp password
-                  </Button>
-                  {/* Permanent delete — irreversible, requires type-to-confirm (ADR-0034 §2) */}
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    className="flex-1 sm:flex-none min-h-[40px]"
-                    onClick={() => setDeleteUid(u.uid)}
-                    disabled={deletePermanently.isPending}
-                  >
-                    Delete
-                  </Button>
-                </div>
-              </div>
+              <ListRow
+                key={u.uid}
+                action={
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => handleReset(u.uid, u.email)}
+                      disabled={resetPw.isPending}
+                    >
+                      Issue temp password
+                    </Button>
+                    {/* Permanent delete — irreversible, requires type-to-confirm (ADR-0034 §2) */}
+                    <Button
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => setDeleteUid(u.uid)}
+                      disabled={deletePermanently.isPending}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                }
+              >
+                <p className="text-sm font-medium text-foreground">{u.display_name}</p>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {u.email} · {u.role}{u.flat_number ? ` · ${u.flat_number}` : ""}
+                </p>
+              </ListRow>
             ))}
           </div>
           {resetError && <p className="text-sm text-destructive">{resetError}</p>}
         </section>
 
         {/* Add user form */}
-        <section className="space-y-4">
-          <h2 className="text-lg font-semibold text-foreground">Add user</h2>
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold text-foreground">Add user</h2>
           <form onSubmit={submitAdd} className="max-w-md space-y-3">
             <div className="space-y-1">
               <label htmlFor="user-email" className="text-sm font-medium text-foreground">
@@ -255,8 +259,8 @@ export default function TenantUsers() {
         </section>
 
         {/* Bulk CSV import */}
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold text-foreground">Bulk import (CSV)</h2>
+        <section className="space-y-2">
+          <h2 className="text-base font-semibold text-foreground">Bulk import (CSV)</h2>
           <p className="text-sm text-muted-foreground">
             CSV headers: email, display_name, flat_number, role, household_id
           </p>
