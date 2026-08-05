@@ -178,6 +178,12 @@ otherwise.*
 | [0042](0042-cost-guardrails.md) | Cost Guardrails — Billing Budget & Thresholds | Accepted | One Terraform-managed, alert-only `google_billing_budget` for `sport-slot-dev`, ₹5K/mo ceiling (ADR-0005) with five graduated thresholds (50/80/100/120% actual + 100% forecasted), routed to the existing ADR-0040 channels; automated billing-disable/service-cap response explicitly rejected (PR-4) |
 | [0043](0043-security-hardening.md) | Security Hardening | Accepted | Split by blast radius: PR-5a (headers, CI scanning, registry cleanup, rotation policy), PR-5b (WIF least-privilege; Armor enforce gated on a preview-log review), PR-5c (Armor API-policy SQLi/XSS enforced with a voice-path exemption, option 2 — accepted residual `VOICE-INPUT-VALIDATION` tracked for Phase 18). Closes finding #7, the last of the ten 2026-07-13 audit findings. Binary Authorization explicitly deferred to Phase 18 |
 
+## FinOps — Environment power control
+
+| ADR | Title | Status | Summary |
+|-----|-------|--------|---------|
+| [0047](0047-environment-power-control-finops.md) | Environment Power Control (FinOps Sleep / Wake) | Proposed | Manual enable/disable + nightly auto-disable at 23:00 Asia/Kolkata; delete Redis + Cloud Run min=0 + pause scheduler/uptime; keep LB/data; hold marker for soak nights; all non-customer envs now, prod `nightly_disable: false` later; residual LB cost accepted; billing-account disable rejected (extends ADR-0005 / ADR-0042) |
+
 ## Reading Order
 
 For someone new to the project, read ADRs in numerical order.
