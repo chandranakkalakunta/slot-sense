@@ -1,6 +1,6 @@
 # ADR-0047: Environment Power Control (FinOps Sleep / Wake)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-05
 - **Related:** ADR-0005 (cost baseline), ADR-0009 (Memorystore Redis),
   ADR-0041 (Redis residual / Cloud Run scale), ADR-0042 (cost
@@ -199,16 +199,16 @@ with explicit `--env` (same registry as `tf.sh`: `dev`, `dev-03`,
 - Per-tenant “power” (this is **environment / GCP project** level).
 - Changing ADR-0005 budget ceilings or ADR-0042 threshold math.
 
-## Implementation follow-up (not part of acceptance of the decision)
+## Implementation
 
-Tracked separately after this ADR is Accepted:
+Delivered with this decision’s implementation PR:
 
-1. `scripts/env-power.sh` (+ Makefile targets)
-2. `infrastructure/env-power.yaml` registry
-3. Hold/state storage (GCS recommended)
-4. Nightly GitHub Actions workflow (23:00 IST)
+1. `scripts/env-power.sh` + Makefile targets (`env-enable`, `env-disable`, …)
+2. `infrastructure/env-power.json` registry
+3. Hold/state in `gs://<project>-env-power/` (bucket via Terraform)
+4. `.github/workflows/env-nightly-disable.yml` (23:00 Asia/Kolkata)
 5. `docs/runbooks/env-power.md`
-6. CHANGELOG entry
+6. `terraform/env_power.tf` — state bucket + CI WIF roles for nightly
 
 ## Cost impact
 
@@ -216,9 +216,3 @@ Tracked separately after this ADR is Accepted:
 - **Savings:** roughly one Redis Basic instance fee per disabled
   project-month of sleep (plus any min-instance hours avoided).
 - **Residual while disabled:** LB/IP + storage class costs remain.
-
-## Status progression
-
-- **Proposed** — decision under review (this PR).
-- **Accepted** — flip status when the decision is signed off;
-  implement follow-up list in subsequent PR(s).

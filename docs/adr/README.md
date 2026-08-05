@@ -182,7 +182,7 @@ otherwise.*
 
 | ADR | Title | Status | Summary |
 |-----|-------|--------|---------|
-| [0047](0047-environment-power-control-finops.md) | Environment Power Control (FinOps Sleep / Wake) | Proposed | Manual enable/disable + nightly auto-disable at 23:00 Asia/Kolkata; delete Redis + Cloud Run min=0 + pause scheduler/uptime; keep LB/data; hold marker for soak nights; all non-customer envs now, prod `nightly_disable: false` later; residual LB cost accepted; billing-account disable rejected (extends ADR-0005 / ADR-0042) |
+| [0047](0047-environment-power-control-finops.md) | Environment Power Control (FinOps Sleep / Wake) | Accepted | Manual enable/disable + nightly auto-disable at 23:00 Asia/Kolkata; delete Redis + Cloud Run min=0 + pause scheduler/uptime; keep LB/data; hold marker for soak nights; all non-customer envs now, prod `nightly_disable: false` later; residual LB cost accepted; billing-account disable rejected (extends ADR-0005 / ADR-0042). Ops: `docs/runbooks/env-power.md` |
 
 ## Reading Order
 
