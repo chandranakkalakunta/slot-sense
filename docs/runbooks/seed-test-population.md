@@ -51,11 +51,18 @@ uv run python ../scripts/seed_test_population.py \
 cd backend
 uv run python ../scripts/seed_test_population.py \
   --project slot-sense-test-03 \
-  --set-min-instances 1
+  --expand-to-full \
+  --workers 32 \
+  --chunk-size 200 \
+  --set-min-instances 0
 ```
 
-Interrupt anytime; re-run the same command to **resume**.
+**Speed:** creates users in parallel (`--workers`, default **32**). This is
+**laptop → Firebase Admin SDK**, not Cloud Run — warming more Cloud Run
+instances does **not** speed the seeder. If Auth quota errors appear, lower
+`--workers` to 16; if stable, try 48–64.
 
+Interrupt anytime; re-run the same command to **resume** (state file).
 ### “All tenants SKIP complete” after a smoke run
 
 Smoke uses `--max-flats` / `--max-users-per-tenant` and marks each tenant
