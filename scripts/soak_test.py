@@ -6,28 +6,26 @@ Uses seeded residents ({slug}.resident.N@example.com / ResidentPass143$) on
 slot-sense-test-*. Discovers users via Firestore Admin; drives real HTTPS
 book / cancel / availability traffic.
 
-Scenarios (default mix):
-  1. Steady multi-tenant traffic — book, list, cancel, availability
-  2. Tenant coverage — at least --tenant-pct (default 15%) of tenants active
-  3. Morning rush flash — many users hit the same slot (08:00 Asia/Kolkata
-     wall-clock, or --rush-now)
-  4. Periodic lock proof — N parallel POSTs → expect ≤1 winner per slot
-  5. Horizon / multi-day scatter — book across next few days
-  6. Read-heavy waves — facilities + availability without write
+## Realistic mode (default)
+  - **All tenants** participate
+  - ~**10–15% of users per tenant** (capped) book/cancel so quota is spread
+  - Cancel-aware mix keeps slots + daily quota recycling for multi-hour runs
+  - Avoids the old trap: 3 tenants × 8 users → quota wall → only failed books
 
-Monitoring: leave SlotSense Ops dashboard open (see docs/runbooks/soak-test.md).
-Hold nightly env-power disable before long soaks.
+Scenarios:
+  1. Steady multi-tenant book / cancel / availability / list
+  2. Morning rush flash (--rush-now or --rush-at 08:00 Asia/Kolkata)
+  3. Periodic lock proof (N parallel POSTs → ≤1 winner)
+  4. Multi-day horizon scatter
+
+Monitoring: docs/runbooks/soak-test.md · hold nightly env-power during long soaks.
 
 Examples:
-  # 30 min soak, rush immediately, 15% tenants, test-03
-  cd backend && uv run python ../scripts/soak_test.py \\
-    --project slot-sense-test-03 \\
-    --base-domain slotsense-test.chandraailabs.com \\
-    --firebase-api-key "$FUNC_FIREBASE_API_KEY" \\
-    --duration 30m --rush-now --tenant-pct 15
+  # Realistic 2h soak (default mode)
+  make soak-test DURATION=2h
 
-  # Wait for real 08:00 IST flash, then continue soak 2h
-  uv run python ../scripts/soak_test.py ... --duration 2h --rush-at 08:00
+  # Legacy narrow soak (few tenants, fixed users each)
+  uv run python ../scripts/soak_test.py --mode legacy --tenant-pct 15 --users-per-tenant 8
 """
 
 from __future__ import annotations
@@ -197,12 +195,29 @@ def load_tenant_slugs(state_path: Path) -> list[str]:
     ]
 
 
+def _tenant_users_done(state_path: Path, slug: str) -> int:
+    if not state_path.is_file():
+        return 0
+    try:
+        st = json.loads(state_path.read_text())
+        return int((st.get("tenants") or {}).get(slug, {}).get("users_done") or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def sample_residents_from_firestore(
     project: str,
     slugs: list[str],
-    per_tenant: int,
+    per_tenant: int | dict[str, int],
+    *,
+    fetch_pool_factor: int = 8,
 ) -> dict[str, list[dict[str, str]]]:
-    """Return {slug: [{email, uid, flat_number}, ...]} via Admin SDK."""
+    """Return {slug: [{email, uid, flat_number}, ...]} via Admin SDK.
+
+    per_tenant: fixed int or map slug → target count.
+    Fetches a larger pool then random-samples so long soaks don't always
+    hit the same first N Firestore docs.
+    """
     import firebase_admin
     from firebase_admin import credentials, firestore
 
@@ -212,7 +227,8 @@ def sample_residents_from_firestore(
 
     out: dict[str, list[dict[str, str]]] = {}
     for slug in slugs:
-        # Resolve tenant_id by scanning tenants collection (slug field) or state
+        want = per_tenant[slug] if isinstance(per_tenant, dict) else per_tenant
+        want = max(1, int(want))
         tid = None
         if SEED_STATE.is_file():
             st = json.loads(SEED_STATE.read_text())
@@ -225,13 +241,13 @@ def sample_residents_from_firestore(
             log(f"WARN: no tenant_id for {slug} — skip")
             continue
 
+        pool_limit = min(max(want * fetch_pool_factor, want + 50), 2000)
         rows: list[dict[str, str]] = []
-        # Prefer seeded residents — filter client-side (no composite index required)
         q = (
             db.collection("tenants")
             .document(tid)
             .collection("users")
-            .limit(max(per_tenant * 20, 80))
+            .limit(pool_limit)
         )
         for doc in q.stream():
             d = doc.to_dict() or {}
@@ -247,12 +263,48 @@ def sample_residents_from_firestore(
                     "flat_number": str(d.get("flat_number") or ""),
                 }
             )
-            if len(rows) >= per_tenant * 3:
-                break
         random.shuffle(rows)
-        out[slug] = rows[:per_tenant]
-        log(f"sampled {len(out[slug])} residents for {slug} (tenant_id={tid})")
+        out[slug] = rows[:want]
+        log(
+            f"sampled {len(out[slug])}/{want} residents for {slug} "
+            f"(pool={len(rows)} tenant_id={tid})"
+        )
     return out
+
+
+def plan_realistic_actors(
+    slugs: list[str],
+    *,
+    user_pct: float,
+    max_users_per_tenant: int,
+    min_users_per_tenant: int,
+    max_total_actors: int,
+    state_path: Path,
+) -> dict[str, int]:
+    """Per-tenant actor counts: ~user_pct of seeded users, capped for auth cost."""
+    raw: dict[str, int] = {}
+    for slug in slugs:
+        n_users = _tenant_users_done(state_path, slug)
+        if n_users <= 0:
+            n_users = max_users_per_tenant * 10  # unknown size → use cap band
+        target = int(round(n_users * (user_pct / 100.0)))
+        target = max(min_users_per_tenant, target)
+        target = min(max_users_per_tenant, target)
+        raw[slug] = target
+    total = sum(raw.values())
+    if total > max_total_actors and total > 0:
+        scale = max_total_actors / total
+        raw = {
+            s: max(min_users_per_tenant, int(round(n * scale)))
+            for s, n in raw.items()
+        }
+        # trim if still over due to rounding
+        while sum(raw.values()) > max_total_actors:
+            s_max = max(raw, key=lambda k: raw[k])
+            if raw[s_max] <= min_users_per_tenant:
+                break
+            raw[s_max] -= 1
+    return raw
 
 
 async def firebase_id_token(
@@ -389,6 +441,8 @@ class Actor:
     origin: str
     facility_ids: list[str] = field(default_factory=list)
     my_bookings: list[str] = field(default_factory=list)
+    # Track confirmed opens we created (for cancel preference / quota hygiene)
+    open_count: int = 0
 
 
 async def discover_facilities(
@@ -439,20 +493,58 @@ async def steady_tick(
     metrics: Metrics,
     actor: Actor,
     rng: random.Random,
+    *,
+    realistic: bool = True,
 ) -> None:
-    """One unit of mixed real-world traffic for a resident."""
+    """One unit of mixed real-world traffic for a resident.
+
+    Realistic mode: bias toward cancel when the actor already holds opens so
+    daily quota (max_slots_per_user_per_sport_per_day) and facility slots
+    recycle — long soaks stay bookable instead of dying on 409 QUOTA.
+    """
     if not actor.facility_ids:
         await discover_facilities(client, metrics, actor)
         if not actor.facility_ids:
             return
 
-    roll = rng.random()
     fid = rng.choice(actor.facility_ids)
-    # 40% availability read, 25% book, 15% list bookings, 15% cancel, 5% facilities refresh
-    if roll < 0.40:
+    has_open = bool(actor.my_bookings) or actor.open_count > 0
+
+    if realistic:
+        # Sustainable mix: cancel when holding bookings; book when free.
+        # ~30% availability, ~25% book, ~25% cancel, ~15% list, ~5% facilities
+        if has_open and rng.random() < 0.45:
+            action = "cancel"
+        else:
+            r = rng.random()
+            if r < 0.32:
+                action = "availability"
+            elif r < 0.58:
+                action = "book"
+            elif r < 0.78:
+                action = "cancel" if has_open else "book"
+            elif r < 0.93:
+                action = "list_mine"
+            else:
+                action = "facilities"
+    else:
+        # Legacy fixed mix
+        r = rng.random()
+        if r < 0.40:
+            action = "availability"
+        elif r < 0.65:
+            action = "book"
+        elif r < 0.80:
+            action = "list_mine"
+        elif r < 0.95:
+            action = "cancel"
+        else:
+            action = "facilities"
+
+    if action == "availability":
         day = date.today() + timedelta(days=rng.randint(0, 6))
         await pick_bookable_slot(client, metrics, actor, fid, day)
-    elif roll < 0.65:
+    elif action == "book":
         day = date.today() + timedelta(days=rng.randint(1, 6))
         start = await pick_bookable_slot(client, metrics, actor, fid, day)
         if not start:
@@ -467,16 +559,34 @@ async def steady_tick(
             bid = body.get("id") or body.get("booking_id")
             if bid:
                 actor.my_bookings.append(bid)
+                actor.open_count += 1
                 metrics.bookings_created += 1
-    elif roll < 0.80:
+        elif code == 409:
+            # Quota wall — force cancel preference next ticks
+            actor.open_count = max(actor.open_count, 1)
+    elif action == "list_mine":
         await api(
             client, metrics,
             origin=actor.origin, method="GET", path="/api/v1/bookings/mine",
             token=actor.token, op="list_mine", tenant=actor.slug,
         )
-    elif roll < 0.95:
+    elif action == "cancel":
         if not actor.my_bookings:
-            return
+            # Discover own bookings from API so we can recycle quota
+            code, body = await api(
+                client, metrics,
+                origin=actor.origin, method="GET", path="/api/v1/bookings/mine",
+                token=actor.token, op="list_mine", tenant=actor.slug,
+            )
+            if code == 200 and isinstance(body, dict):
+                for b in body.get("items") or []:
+                    if isinstance(b, dict) and b.get("status") == "confirmed":
+                        bid = b.get("id") or b.get("booking_id")
+                        if bid and bid not in actor.my_bookings:
+                            actor.my_bookings.append(bid)
+                actor.open_count = len(actor.my_bookings)
+            if not actor.my_bookings:
+                return
         bid = actor.my_bookings.pop(0)
         code, _ = await api(
             client, metrics,
@@ -486,6 +596,10 @@ async def steady_tick(
         )
         if code in (200, 204):
             metrics.bookings_cancelled += 1
+            actor.open_count = max(0, actor.open_count - 1)
+        else:
+            # put back if cancel failed (already cancelled elsewhere)
+            pass
     else:
         await discover_facilities(client, metrics, actor)
 
@@ -736,25 +850,55 @@ async def async_main(args: argparse.Namespace) -> int:
 
     duration_s = parse_duration(args.duration)
     all_slugs = load_tenant_slugs(Path(args.state_file))
-    n_tenants = max(1, int(round(len(all_slugs) * (args.tenant_pct / 100.0))))
-    n_tenants = max(n_tenants, args.min_tenants)
-    n_tenants = min(n_tenants, len(all_slugs))
-    active_slugs = random.sample(all_slugs, n_tenants) if len(all_slugs) > n_tenants else all_slugs
-    # Ensure pct target documented
-    pct = 100.0 * len(active_slugs) / max(1, len(all_slugs))
-    log(
-        f"project={args.project} base={args.base_domain} "
-        f"tenants_active={len(active_slugs)}/{len(all_slugs)} ({pct:.0f}%) "
-        f"duration={args.duration} workers={args.workers}"
-    )
+    state_path = Path(args.state_file)
+    realistic = args.mode == "realistic"
+
+    if realistic:
+        active_slugs = list(all_slugs)  # all tenants
+        per_map = plan_realistic_actors(
+            active_slugs,
+            user_pct=args.user_pct,
+            max_users_per_tenant=args.max_users_per_tenant,
+            min_users_per_tenant=args.min_users_per_tenant,
+            max_total_actors=args.max_total_actors,
+            state_path=state_path,
+        )
+        log(
+            f"mode=realistic project={args.project} "
+            f"tenants={len(active_slugs)}/{len(all_slugs)} "
+            f"user_pct≈{args.user_pct}% cap/tenant={args.max_users_per_tenant} "
+            f"planned_actors={sum(per_map.values())} "
+            f"duration={args.duration} workers={args.workers}"
+        )
+        log(
+            "per-tenant actors: "
+            + ", ".join(f"{s}={per_map[s]}" for s in sorted(per_map))
+        )
+    else:
+        n_tenants = max(1, int(round(len(all_slugs) * (args.tenant_pct / 100.0))))
+        n_tenants = max(n_tenants, args.min_tenants)
+        n_tenants = min(n_tenants, len(all_slugs))
+        active_slugs = (
+            random.sample(all_slugs, n_tenants)
+            if len(all_slugs) > n_tenants
+            else all_slugs
+        )
+        per_map = {s: args.users_per_tenant for s in active_slugs}
+        pct = 100.0 * len(active_slugs) / max(1, len(all_slugs))
+        log(
+            f"mode=legacy project={args.project} "
+            f"tenants_active={len(active_slugs)}/{len(all_slugs)} ({pct:.0f}%) "
+            f"users_per_tenant={args.users_per_tenant} "
+            f"duration={args.duration} workers={args.workers}"
+        )
+
     log(f"active tenants: {', '.join(sorted(active_slugs))}")
     log("TIP: hold nightly disable → make env-hold ENV=test-03 DAYS=1 REASON=soak")
     log("TIP: open SlotSense Ops dashboard + Cloud Run metrics for this project")
 
-    # Sample residents
     log("sampling residents from Firestore (ADC)…")
     samples = sample_residents_from_firestore(
-        args.project, active_slugs, per_tenant=args.users_per_tenant
+        args.project, active_slugs, per_tenant=per_map
     )
     if not samples:
         log("ERROR: no residents sampled — is seed complete and ADC authed?")
@@ -767,19 +911,34 @@ async def async_main(args: argparse.Namespace) -> int:
 
     actors: list[Actor] = []
     async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
-        # Auth pool
+        # Auth pool (bounded concurrency — Identity Toolkit rate limits)
         log("signing in residents…")
+        auth_sem = asyncio.Semaphore(max(4, args.auth_concurrency))
+
+        async def _auth_one(slug: str, row: dict[str, str], origin: str) -> Actor | None:
+            async with auth_sem:
+                tok = await firebase_id_token(
+                    client, api_key, row["email"], password
+                )
+            if not tok:
+                metrics.errors["auth_fail"] += 1
+                return None
+            return Actor(
+                slug=slug, email=row["email"], token=tok, origin=origin
+            )
+
+        auth_jobs = []
         for slug, rows in samples.items():
             origin = f"https://{slug}.{args.base_domain}"
             for row in rows:
-                tok = await firebase_id_token(client, api_key, row["email"], password)
-                if not tok:
-                    metrics.errors["auth_fail"] += 1
-                    continue
-                actors.append(
-                    Actor(slug=slug, email=row["email"], token=tok, origin=origin)
-                )
-        log(f"authenticated actors={len(actors)} auth_fail={metrics.errors.get('auth_fail', 0)}")
+                auth_jobs.append(_auth_one(slug, row, origin))
+        auth_results = await asyncio.gather(*auth_jobs)
+        actors = [a for a in auth_results if a is not None]
+        log(
+            f"authenticated actors={len(actors)} "
+            f"auth_fail={metrics.errors.get('auth_fail', 0)} "
+            f"(planned≈{sum(per_map.values())})"
+        )
         if len(actors) < 3:
             log("ERROR: need at least 3 authenticated actors")
             return 1
@@ -831,14 +990,18 @@ async def async_main(args: argparse.Namespace) -> int:
             local = random.Random(args.seed + wid * 997)
             while time.monotonic() < end:
                 actor = local.choice(actors)
-                await steady_tick(client, metrics, actor, local)
+                await steady_tick(
+                    client, metrics, actor, local, realistic=realistic
+                )
                 tick += 1
                 await asyncio.sleep(args.pace_ms / 1000.0)
                 if tick % 50 == 0 and wid == 0:
                     s = metrics.summary()
                     log(
                         f"progress ops={s['latency_ms']['n']} "
+                        f"p50={s['latency_ms']['p50']}ms "
                         f"p95={s['latency_ms']['p95']}ms "
+                        f"p99={s['latency_ms']['p99']}ms "
                         f"tenants={s['active_tenant_count']} "
                         f"created={s['bookings_created']} cancelled={s['bookings_cancelled']} "
                         f"5xx={sum(v for k,v in metrics.status.items() if k >= 500)} "
@@ -878,9 +1041,13 @@ async def async_main(args: argparse.Namespace) -> int:
     summary["config"] = {
         "project": args.project,
         "base_domain": args.base_domain,
+        "mode": args.mode,
         "duration": args.duration,
-        "tenant_pct_target": args.tenant_pct,
+        "tenant_pct_target": 100.0 if realistic else args.tenant_pct,
+        "user_pct": args.user_pct if realistic else None,
+        "max_users_per_tenant": args.max_users_per_tenant if realistic else args.users_per_tenant,
         "tenants_selected": sorted(active_slugs),
+        "actors_planned": sum(per_map.values()),
         "actors": len(actors),
         "workers": args.workers,
         "rush_now": args.rush_now,
@@ -893,9 +1060,9 @@ async def async_main(args: argparse.Namespace) -> int:
 
     # Exit code: fail if tenant coverage short or lock proof always failed
     actual_pct = 100.0 * summary["active_tenant_count"] / max(1, len(all_slugs))
-    if actual_pct + 0.5 < args.tenant_pct * 0.5:
-        # only half of target ever touched — hard fail
-        log(f"FAIL: tenant coverage {actual_pct:.0f}% << target {args.tenant_pct}%")
+    target_pct = 100.0 if realistic else args.tenant_pct
+    if actual_pct + 0.5 < target_pct * 0.5:
+        log(f"FAIL: tenant coverage {actual_pct:.0f}% << target {target_pct}%")
         return 1
     if metrics.lock_proof_double > 0:
         log(
@@ -925,17 +1092,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--password", default=DEFAULT_PASSWORD)
     p.add_argument("--state-file", default=str(SEED_STATE))
     p.add_argument("--duration", default="30m", help="e.g. 30m, 2h, 3600s")
+    p.add_argument(
+        "--mode",
+        choices=("realistic", "legacy"),
+        default="realistic",
+        help="realistic=all tenants + ~user_pct users + cancel recycle (default); "
+             "legacy=tenant-pct + fixed users-per-tenant",
+    )
     p.add_argument("--tenant-pct", type=float, default=15.0,
-                   help="%% of seeded tenants that must participate (default 15)")
+                   help="[legacy] %% of seeded tenants (default 15)")
     p.add_argument("--min-tenants", type=int, default=3)
     p.add_argument("--users-per-tenant", type=int, default=8,
-                   help="Residents sampled & authed per active tenant")
-    p.add_argument("--workers", type=int, default=12, help="Concurrent steady-state workers")
+                   help="[legacy] Residents per active tenant")
+    p.add_argument("--user-pct", type=float, default=12.0,
+                   help="[realistic] %% of each tenant's seeded users (default 12, aim 10–15)")
+    p.add_argument("--max-users-per-tenant", type=int, default=40,
+                   help="[realistic] Cap actors per tenant after user-pct (default 40)")
+    p.add_argument("--min-users-per-tenant", type=int, default=5,
+                   help="[realistic] Floor actors per tenant (default 5)")
+    p.add_argument("--max-total-actors", type=int, default=500,
+                   help="[realistic] Global cap after per-tenant plan (default 500)")
+    p.add_argument("--auth-concurrency", type=int, default=16,
+                   help="Parallel Firebase sign-ins (default 16)")
+    p.add_argument("--workers", type=int, default=24, help="Concurrent steady-state workers")
     p.add_argument("--pace-ms", type=int, default=80, help="Sleep between ticks per worker")
     p.add_argument("--rush-now", action="store_true", help="Fire morning-rush flash immediately")
     p.add_argument("--rush-at", default="", help="HH:MM Asia/Kolkata wall-clock for rush (e.g. 08:00)")
     p.add_argument("--rush-at-end", action="store_true", help="Also fire rush at end of soak")
-    p.add_argument("--rush-n", type=int, default=40, help="Max contenders in rush flash")
+    p.add_argument("--rush-n", type=int, default=80, help="Max contenders in rush flash")
     p.add_argument("--rush-slot", default="", help="Optional fixed HH:MM slot for rush")
     p.add_argument("--lock-proof-every", type=int, default=200, help="Steady ticks between lock proofs")
     p.add_argument("--lock-proof-n", type=int, default=12)

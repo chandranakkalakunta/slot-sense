@@ -11,10 +11,20 @@
 | # | Goal | How the harness does it |
 |---|------|-------------------------|
 | 1 | Real traffic mix | Steady workers: **availability**, **book**, **list mine**, **cancel**, facility list |
-| 2 | ≥10–15% tenants active | `--tenant-pct 15` samples that share of seeded tenants |
+| 2 | **Realistic population (default)** | **All tenants** + ~**10–15% of users per tenant** (capped) so quota is spread |
 | 3 | 08:00 morning stress | `--rush-at 08:00` (Asia/Kolkata) or `--rush-now` for immediate flash |
 | 4 | Watch monitoring live | Ops dashboard + Cloud Run metrics open during run (below) |
 | 5 | Lock correctness under load | Periodic **N-parallel same-slot** waves (expect 1 winner) |
+| 6 | Multi-hour sustainability | Cancel-aware mix recycles slots + daily quota (avoids early 409 wall) |
+
+### Realistic vs legacy
+
+| Mode | Tenants | Users | Traffic | Use when |
+|------|---------|-------|---------|----------|
+| **`realistic` (default)** | All seeded | ~`user_pct` (12%) of each tenant, capped (`max-users-per-tenant` 40, `max-total-actors` 500) | Prefer **cancel when holding bookings**, book when free | Long soaks, production-like occupancy |
+| **`legacy`** | `tenant-pct` (e.g. 15% → 3 of 20) | Fixed `users-per-tenant` (e.g. 8) | Fixed 25% book / 15% cancel | Quick narrow debug |
+
+**Why realistic exists:** With 3 tenants × 8 users, daily `max_slots_per_user_per_sport_per_day` (seed default **2**) is exhausted quickly → `created` freezes and the soak becomes read-only + failed books. Spreading load across **all tenants** and **many more residents**, plus **cancel recycling**, keeps successful bookings possible for 2h+.
 
 ### Additional scenarios included
 
@@ -118,50 +128,51 @@
 ```bash
 cd backend
 
-# Short validation (10–15 min) — rush immediately
+# Short validation — realistic mode (default)
 uv run python ../scripts/soak_test.py \
-  --project slot-sense-test-03 \
-  --base-domain slotsense-test.chandraailabs.com \
-  --duration 15m \
-  --tenant-pct 15 \
-  --users-per-tenant 8 \
-  --workers 12 \
-  --rush-now \
-  --report ../soak-report.json
+  --duration 15m --rush-now --report ../soak-report.json
 
-# Full morning-rush soak (start before 08:00 IST)
+# Multi-hour realistic soak (all tenants, ~12% users capped)
 uv run python ../scripts/soak_test.py \
-  --project slot-sense-test-03 \
-  --base-domain slotsense-test.chandraailabs.com \
-  --duration 3h \
-  --tenant-pct 15 \
-  --users-per-tenant 12 \
-  --workers 16 \
-  --rush-at 08:00 \
-  --rush-n 60 \
+  --duration 2h --rush-now \
+  --user-pct 12 --max-users-per-tenant 40 --max-total-actors 500 \
+  --workers 24 \
+  --report ../soak-report-2h.json
+
+# Real morning-rush (start before 08:00 IST)
+uv run python ../scripts/soak_test.py \
+  --duration 3h --rush-at 08:00 --rush-n 80 \
   --report ../soak-report-morning.json
 ```
 
 Makefile:
 
 ```bash
-make soak-test                          # defaults: 30m, rush-now, test-03
-make soak-test DURATION=2h RUSH=--rush-at\ 08:00
+make soak-test                              # realistic, 30m, rush-now
+make soak-test DURATION=2h
+make soak-test DURATION=2h USER_PCT=15 MAX_ACTORS=600 WORKERS=32
+make soak-test-legacy DURATION=15m          # old 15% tenants × 8 users
 ```
 
 ### Important flags
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--duration` | `30m` | Steady phase length (`30m` / `2h` / `3600s`) |
-| `--tenant-pct` | `15` | % of seeded tenants participating |
-| `--users-per-tenant` | `8` | Residents sampled + signed in per tenant |
-| `--workers` | `12` | Concurrent steady-state workers |
-| `--rush-now` | off | Immediate 08:00-style flash |
-| `--rush-at 08:00` | off | Wait until 08:00 **Asia/Kolkata** then flash |
-| `--rush-n` | `40` | Max contenders in flash |
-| `--pace-ms` | `80` | Delay between ticks per worker (lower = hotter) |
+| `--mode` | `realistic` | `realistic` \| `legacy` |
+| `--duration` | `30m` | Steady phase (`30m` / `2h` / `3600s`) |
+| `--user-pct` | `12` | **[realistic]** % of each tenant’s seeded users (aim **10–15**) |
+| `--max-users-per-tenant` | `40` | Cap after user-pct (auth cost control) |
+| `--max-total-actors` | `500` | Global actor cap after per-tenant plan |
+| `--tenant-pct` | `15` | **[legacy]** % of tenants |
+| `--users-per-tenant` | `8` | **[legacy]** fixed residents per tenant |
+| `--workers` | `24` | Concurrent steady-state workers |
+| `--rush-now` | off | Immediate flash |
+| `--rush-at 08:00` | off | Wait until 08:00 **Asia/Kolkata** |
+| `--rush-n` | `80` | Max contenders in flash |
+| `--pace-ms` | `80` | Delay between ticks per worker |
 | `--report` | `soak-report.json` | JSON summary path |
+
+**Auth cost:** realistic mode may sign in hundreds of users (capped). First minutes are auth + facility warm-up before steady traffic.
 
 Password defaults to seed `ResidentPass143$`. Firebase API key defaults from
 `infrastructure/firebase-web-configs/slot-sense-test-03.json` when project is test-03.
