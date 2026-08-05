@@ -38,6 +38,7 @@ This document answers:
 |---|---|---|---|
 | **Local tool smoke** | `scripts/verify_toolchain.sh` | gcloud, terraform, firebase, pnpm, uv on PATH | No |
 | **Concurrency / lock stress** | `scripts/concurrency_test.py` | N parallel booking POSTs → exactly one 201 | No (needs live API + token) |
+| **Soak / multi-tenant load** | `scripts/soak_test.py` + [soak-test.md](../runbooks/soak-test.md) | 15%+ tenants, book/cancel mix, 08:00 rush flash, lock proof; test env only | No (Coordinator; watch Ops dashboard) |
 | **Voice / STT probes** | `scripts/voice/*` | Model probes, live STT checks | No |
 | **Deploy pipeline smoke** | `docs/runbooks/*`, post-bootstrap | `curl /health`, login, cert ACTIVE | Documented manual |
 | **DR bootstrap verification** | `drill-bootstrap.sh` Phase 8 | Cloud Run Ready, frontend projectId, terraform plan, LB health | In bootstrap only |

@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### test(soak): multi-tenant soak harness for test env
+
+`scripts/soak_test.py` + `docs/runbooks/soak-test.md` + `make soak-test`.
+Steady book/cancel/availability mix across ≥15% of seeded tenants, morning
+rush flash (`--rush-at 08:00` or `--rush-now`), periodic lock-proof waves,
+JSON report (p50/p95/p99). Test projects only; monitoring checklist in runbook.
+
 ### feat(finops): environment power control (ADR-0047)
 
 Sleep/wake GCP envs to cut fixed cost (especially Memorystore Redis):
