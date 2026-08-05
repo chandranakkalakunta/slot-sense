@@ -610,6 +610,9 @@ async def lock_proof_wave(
         expected_booking_id = f"{fid}_{day.isoformat()}_{start}"
 
         async def post(a: Actor) -> dict[str, Any]:
+            # Do NOT cancel here — cancel-after-wave only. Mid-race cancel
+            # frees the slot so a second contender gets 201 on the same
+            # booking_id (re-book after cancel), which is a false DOUBLE_BOOK.
             code, resp = await api(
                 client, metrics,
                 origin=a.origin, method="POST", path="/api/v1/bookings",
@@ -620,14 +623,6 @@ async def lock_proof_wave(
             api_code = _api_code(resp)
             if code == 201 and isinstance(resp, dict):
                 bid = resp.get("id") or resp.get("booking_id")
-                if bid:
-                    await api(
-                        client, metrics,
-                        origin=a.origin, method="POST",
-                        path=f"/api/v1/bookings/{bid}/cancel",
-                        token=a.token, op="lock_proof_cancel", tenant=a.slug,
-                    )
-                    metrics.bookings_cancelled += 1
             return {
                 "email": a.email,
                 "status": code,
@@ -669,6 +664,26 @@ async def lock_proof_wave(
                 f"booking_ids={[w['booking_id'] for w in winners]}"
             )
 
+        # Cleanup: cancel only AFTER the race is scored (one cancel per booking_id)
+        cancelled_ids: set[str] = set()
+        for w in winners:
+            bid = w.get("booking_id")
+            if not bid or bid in cancelled_ids:
+                continue
+            # Use the winner's token that created it
+            actor = next((a for a in group if a.email == w["email"]), None)
+            if actor is None:
+                continue
+            c_code, _ = await api(
+                client, metrics,
+                origin=actor.origin, method="POST",
+                path=f"/api/v1/bookings/{bid}/cancel",
+                token=actor.token, op="lock_proof_cancel", tenant=actor.slug,
+            )
+            if c_code in (200, 204):
+                metrics.bookings_cancelled += 1
+                cancelled_ids.add(bid)
+
         metrics.contention_events.append({
             "kind": "lock_proof",
             "ts": ts,
@@ -684,6 +699,10 @@ async def lock_proof_wave(
             "api_code_counts": dict(api_codes),
             "winners": winners,
             "all_results": results,
+            "note": (
+                "Cancel runs only after wave scoring. Two 201s for same "
+                "booking_id with this ordering is a real product race."
+            ),
         })
 
 
