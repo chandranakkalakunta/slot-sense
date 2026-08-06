@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### test(soak): realistic multi-tenant user model
+
+Default `--mode realistic`: **all tenants**, ~**12% of users per tenant**
+(capped), cancel-aware traffic so daily quota/slots recycle on long runs.
+Legacy narrow soak via `--mode legacy`. Progress logs p50/p95/p99.
+`make soak-test` / `make soak-test-legacy`.
+
+Also: **ADC preflight** (fail fast on reauth), Firebase **token refresh every 45m**,
+temporary **quota bump to 10** slots/user/sport/day for soak tenants, latency
+percentiles **exclude HTTP 401**.
+
 ### test(soak): multi-tenant soak harness for test env
 
 `scripts/soak_test.py` + `docs/runbooks/soak-test.md` + `make soak-test`.

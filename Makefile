@@ -98,15 +98,31 @@ env-release-hold: ## Clear nightly hold — make env-release-hold ENV=test-03
 # ═══════════════════════════════════════════════════════════════
 
 .PHONY: soak-test
-soak-test: ## Soak test-03 — make soak-test [DURATION=30m] [RUSH=--rush-now]
+soak-test: ## Realistic soak (all tenants, ~12% users) — make soak-test DURATION=2h
 	@cd backend && uv run python ../scripts/soak_test.py \
 		--project slot-sense-test-03 \
 		--base-domain slotsense-test.chandraailabs.com \
+		--mode $(or $(MODE),realistic) \
+		--duration $(or $(DURATION),30m) \
+		--user-pct $(or $(USER_PCT),12) \
+		--max-users-per-tenant $(or $(MAX_USERS_PER_TENANT),40) \
+		--max-total-actors $(or $(MAX_ACTORS),500) \
+		--workers $(or $(WORKERS),24) \
+		$(or $(RUSH),--rush-now) \
+		--report ../$(or $(REPORT),soak-report.json)
+
+.PHONY: soak-test-legacy
+soak-test-legacy: ## Legacy narrow soak (few tenants × fixed users)
+	@cd backend && uv run python ../scripts/soak_test.py \
+		--project slot-sense-test-03 \
+		--base-domain slotsense-test.chandraailabs.com \
+		--mode legacy \
 		--duration $(or $(DURATION),30m) \
 		--tenant-pct $(or $(TENANT_PCT),15) \
+		--users-per-tenant $(or $(USERS_PER_TENANT),8) \
 		--workers $(or $(WORKERS),12) \
 		$(or $(RUSH),--rush-now) \
-		--report ../soak-report.json
+		--report ../$(or $(REPORT),soak-report-legacy.json)
 
 # ═══════════════════════════════════════════════════════════════
 # Development
