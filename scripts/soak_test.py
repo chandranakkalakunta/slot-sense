@@ -331,19 +331,44 @@ async def firebase_id_token(
     api_key: str,
     email: str,
     password: str,
+    *,
+    retries: int = 3,
 ) -> str | None:
+    """Sign in with email/password. Never raises — network blips return None."""
     url = (
         "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
         f"?key={api_key}"
     )
-    r = await client.post(
-        url,
-        json={"email": email, "password": password, "returnSecureToken": True},
-        timeout=30.0,
-    )
-    if r.status_code != 200:
-        return None
-    return r.json().get("idToken")
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            r = await client.post(
+                url,
+                json={
+                    "email": email,
+                    "password": password,
+                    "returnSecureToken": True,
+                },
+                timeout=30.0,
+            )
+            if r.status_code != 200:
+                return None
+            return r.json().get("idToken")
+        except (
+            httpx.ConnectError,
+            httpx.ReadError,
+            httpx.WriteError,
+            httpx.TimeoutException,
+            httpx.NetworkError,
+        ) as exc:
+            last_err = exc
+            # Exponential backoff — Identity Toolkit + laptop wifi flakiness
+            await asyncio.sleep(min(8.0, 0.5 * (2 ** (attempt - 1))))
+            continue
+    if last_err:
+        # Caller logs; keep this quiet to avoid 500-line spam
+        pass
+    return None
 
 
 def ensure_adc(project: str) -> None:
@@ -418,6 +443,19 @@ def bump_tenant_booking_quota(
     return bumped
 
 
+# Serialize per-actor refresh so 24 workers don't stampede the same user
+_actor_refresh_locks: dict[str, asyncio.Lock] = {}
+_refresh_log_every = 25  # log every Nth success to avoid 500-line floods
+
+
+def _actor_lock(email: str) -> asyncio.Lock:
+    lock = _actor_refresh_locks.get(email)
+    if lock is None:
+        lock = asyncio.Lock()
+        _actor_refresh_locks[email] = lock
+    return lock
+
+
 async def refresh_actor_token(
     client: httpx.AsyncClient,
     actor: Actor,
@@ -425,15 +463,36 @@ async def refresh_actor_token(
     api_key: str,
     password: str,
     metrics: Metrics,
+    quiet: bool = False,
 ) -> bool:
-    tok = await firebase_id_token(client, api_key, actor.email, password)
-    if not tok:
-        metrics.errors["token_refresh_fail"] += 1
-        return False
-    actor.token = tok
-    actor.token_issued_at = time.time()
-    metrics.token_refreshes += 1
-    return True
+    """Refresh one actor. Never raises (network errors → False)."""
+    async with _actor_lock(actor.email):
+        # Another waiter may have just refreshed
+        age = time.time() - (actor.token_issued_at or 0)
+        if actor.token and age < 60:  # fresh enough if someone else just did it
+            return True
+        try:
+            tok = await firebase_id_token(
+                client, api_key, actor.email, password, retries=3
+            )
+        except Exception as exc:  # noqa: BLE001 — last-resort shield
+            metrics.errors[f"token_refresh_exc:{type(exc).__name__}"] += 1
+            if not quiet:
+                log(f"WARN token refresh exception {actor.email}: {type(exc).__name__}")
+            return False
+        if not tok:
+            metrics.errors["token_refresh_fail"] += 1
+            return False
+        actor.token = tok
+        actor.token_issued_at = time.time()
+        metrics.token_refreshes += 1
+        n = metrics.token_refreshes
+        if not quiet and (n <= 3 or n % _refresh_log_every == 0):
+            log(
+                f"token refresh ok ({n}) e.g. {actor.email} "
+                f"(age was {age/60:.0f}m)"
+            )
+        return True
 
 
 async def ensure_fresh_token(
@@ -445,17 +504,17 @@ async def ensure_fresh_token(
     metrics: Metrics,
     max_age_s: float,
 ) -> None:
-    age = time.time() - (actor.token_issued_at or 0)
-    if age < max_age_s and actor.token:
-        return
-    ok = await refresh_actor_token(
-        client, actor, api_key=api_key, password=password, metrics=metrics
-    )
-    if ok:
-        log(f"token refresh ok {actor.email} (age was {age/60:.0f}m)")
-    else:
-        log(f"WARN token refresh failed {actor.email}")
-
+    """Refresh if token older than max_age_s. Never raises."""
+    try:
+        age = time.time() - (actor.token_issued_at or 0)
+        if age < max_age_s and actor.token:
+            return
+        await refresh_actor_token(
+            client, actor, api_key=api_key, password=password, metrics=metrics
+        )
+    except Exception as exc:  # noqa: BLE001
+        metrics.errors[f"ensure_token_exc:{type(exc).__name__}"] += 1
+        log(f"WARN ensure_fresh_token {actor.email}: {type(exc).__name__}: {exc}")
 
 def _api_code(body: Any) -> str | None:
     if not isinstance(body, dict):
@@ -1185,28 +1244,55 @@ async def async_main(args: argparse.Namespace) -> int:
                     await lock_proof_wave(client, metrics, actors, n=args.lock_proof_n)
 
         async def proactive_token_refresh_loop() -> None:
-            """Refresh all actor tokens every token_max_age_s / 2 (belt + suspenders)."""
+            """Staggered refresh of all tokens every ~max_age/2. Never crashes soak."""
             interval = max(60.0, token_max_age_s / 2)
             while time.monotonic() < end:
                 await asyncio.sleep(interval)
+                if time.monotonic() >= end:
+                    break
                 log(f"proactive token refresh wave ({len(actors)} actors)…")
-                sem = asyncio.Semaphore(max(4, args.auth_concurrency))
+                # Low concurrency — Identity Toolkit + laptop NAT hate 500 parallel logins
+                sem = asyncio.Semaphore(min(8, max(4, args.auth_concurrency // 2)))
+                ok = fail = 0
 
                 async def _one(a: Actor) -> None:
+                    nonlocal ok, fail
                     async with sem:
-                        await refresh_actor_token(
+                        # Small jitter to avoid thundering herd on TLS to googleapis
+                        await asyncio.sleep(random.random() * 0.05)
+                        success = await refresh_actor_token(
                             client, a,
                             api_key=api_key, password=password, metrics=metrics,
+                            quiet=True,
                         )
+                        if success:
+                            ok += 1
+                        else:
+                            fail += 1
 
-                await asyncio.gather(*[_one(a) for a in actors])
-                log(f"proactive refresh done total_refreshes={metrics.token_refreshes}")
+                results = await asyncio.gather(
+                    *[_one(a) for a in actors], return_exceptions=True
+                )
+                for r in results:
+                    if isinstance(r, Exception):
+                        fail += 1
+                        metrics.errors[f"proactive_exc:{type(r).__name__}"] += 1
+                log(
+                    f"proactive refresh done ok={ok} fail={fail} "
+                    f"total_refreshes={metrics.token_refreshes}"
+                )
 
-        await asyncio.gather(
+        # return_exceptions so one worker/network blip cannot cancel the whole soak
+        gather_results = await asyncio.gather(
             sample_instances_loop(),
             proactive_token_refresh_loop(),
             *[worker(i) for i in range(args.workers)],
+            return_exceptions=True,
         )
+        for i, r in enumerate(gather_results):
+            if isinstance(r, Exception):
+                log(f"WARN background task[{i}] died: {type(r).__name__}: {r}")
+                metrics.errors[f"task_die:{type(r).__name__}"] += 1
 
         # Final rush if scheduled at end of soak and not yet done
         if args.rush_at_end and not rush_done:
@@ -1310,8 +1396,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--token-refresh-minutes",
         type=float,
-        default=45.0,
-        help="Re-sign-in Firebase ID token after this many minutes (default 45; Firebase ~60m TTL)",
+        default=40.0,
+        help="Re-sign-in Firebase ID token after this many minutes "
+             "(default 40; Firebase ~60m TTL — refresh well before expiry)",
     )
     p.add_argument(
         "--soak-quota-slots",
