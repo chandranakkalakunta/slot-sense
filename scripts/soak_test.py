@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
 """
-Soak / load traffic against a SlotSense **test** environment (ADR-0045 / SLO-LOAD-TEST).
+Performance / soak traffic against a SlotSense **test** environment
+(ADR-0045 / SLO-LOAD-TEST).
 
 Uses seeded residents ({slug}.resident.N@example.com / ResidentPass143$) on
 slot-sense-test-*. Discovers users via Firestore Admin; drives real HTTPS
 book / cancel / availability traffic.
 
-## Realistic mode (default)
-  - **All tenants** participate
-  - ~**10–15% of users per tenant** (capped) book/cancel so quota is spread
-  - Cancel-aware mix keeps slots + daily quota recycling for multi-hour runs
-  - Avoids the old trap: 3 tenants × 8 users → quota wall → only failed books
+## Modes
 
-Scenarios:
-  1. Steady multi-tenant book / cancel / availability / list
-  2. Morning rush flash (--rush-now or --rush-at 08:00 Asia/Kolkata)
-  3. Periodic lock proof (N parallel POSTs → ≤1 winner)
-  4. Multi-day horizon scatter
+| Mode | What it is | Use for |
+|------|------------|---------|
+| **community** | One community day: ~10k residents, ~10% facility users, ~100 bookings/day, 08:00 open rush | **Performance baseline** (p50/p95/p99 under normal load) |
+| **realistic** | All tenants, ~12% users, heavy cancel/book recycle | Stress / endurance soak |
+| **legacy** | Few tenants × fixed users | Quick debug |
 
-Monitoring: docs/runbooks/soak-test.md · hold nightly env-power during long soaks.
+## Community model (per tenant, default)
+  - Population scale: 10_000 residents (reference)
+  - Facility users: ~10% → sample of actors online
+  - Bookings/day: ~100 (paced over --duration after rush)
+  - Slot-open contention: flash at 08:00 IST or --rush-now
 
 Examples:
-  # Realistic 2h soak (default mode)
-  make soak-test DURATION=2h
-
-  # Legacy narrow soak (few tenants, fixed users each)
-  uv run python ../scripts/soak_test.py --mode legacy --tenant-pct 15 --users-per-tenant 8
+  make perf-community                 # 30m community day, rush-now
+  make perf-community DURATION=1h RUSH='--rush-at 08:00'
+  make soak-test DURATION=2h          # stress soak (realistic)
 """
 
 from __future__ import annotations
@@ -684,16 +683,16 @@ async def steady_tick(
     actor: Actor,
     rng: random.Random,
     *,
-    realistic: bool = True,
+    mode: str = "realistic",
     api_key: str = "",
     password: str = DEFAULT_PASSWORD,
     token_max_age_s: float = 45 * 60,
 ) -> None:
-    """One unit of mixed real-world traffic for a resident.
+    """One unit of mixed traffic for a resident.
 
-    Realistic mode: bias toward cancel when the actor already holds opens so
-    daily quota (max_slots_per_user_per_sport_per_day) and facility slots
-    recycle — long soaks stay bookable instead of dying on 409 QUOTA.
+    realistic: cancel-heavy recycle for multi-hour stress soak.
+    community: browse-heavy, modest book rate, low cancel (normal day).
+    legacy: fixed mix for debug.
     """
     if api_key:
         await ensure_fresh_token(
@@ -709,9 +708,22 @@ async def steady_tick(
     fid = rng.choice(actor.facility_ids)
     has_open = bool(actor.my_bookings) or actor.open_count > 0
 
-    if realistic:
-        # Sustainable mix: cancel when holding bookings; book when free.
-        # ~30% availability, ~25% book, ~25% cancel, ~15% list, ~5% facilities
+    if mode == "community":
+        # Normal community day: lots of browsing, some books, few cancels
+        # ~55% availability, ~18% book, ~8% cancel, ~14% list, ~5% facilities
+        r = rng.random()
+        if r < 0.55:
+            action = "availability"
+        elif r < 0.73:
+            action = "book"
+        elif r < 0.81:
+            action = "cancel" if has_open else "availability"
+        elif r < 0.95:
+            action = "list_mine"
+        else:
+            action = "facilities"
+    elif mode == "realistic":
+        # Sustainable stress: cancel when holding bookings; book when free.
         if has_open and rng.random() < 0.45:
             action = "cancel"
         else:
@@ -1053,10 +1065,67 @@ async def async_main(args: argparse.Namespace) -> int:
     duration_s = parse_duration(args.duration)
     all_slugs = load_tenant_slugs(Path(args.state_file))
     state_path = Path(args.state_file)
-    realistic = args.mode == "realistic"
+    mode = args.mode
     token_max_age_s = float(args.token_refresh_minutes) * 60.0
+    # Community mode defaults: calmer workers/pace if user left stress defaults
+    if mode == "community":
+        if args.workers == 24:  # argparse default for stress
+            args.workers = args.community_workers
+        if args.pace_ms == 80:
+            # Pace so expected books ≈ bookings_per_day × tenants over duration
+            # book_prob ≈ 0.18 in community mix
+            book_prob = 0.18
+            target_books = max(1, args.bookings_per_day * len(all_slugs))
+            # fraction of books expected in steady phase (rest in rush)
+            steady_frac = max(0.2, 1.0 - args.community_rush_book_frac)
+            steady_books = target_books * steady_frac
+            ticks_needed = steady_books / book_prob
+            # ticks shared across workers over duration
+            pace_s = (duration_s * args.workers) / max(1.0, ticks_needed)
+            args.pace_ms = int(max(200, min(5000, pace_s * 1000)))
+        if args.rush_n == 80:
+            # contenders ≈ people hammering open: default 25/tenant
+            args.rush_n = max(
+                20, args.community_rush_contenders_per_tenant * len(all_slugs)
+            )
+        if args.soak_quota_slots == 10:
+            # Normal day: modest quota is fine; keep seed-like headroom
+            args.soak_quota_slots = max(3, args.bookings_per_day // 20)
+        if not args.no_lock_proof and args.lock_proof_every == 200:
+            # Community baseline is not a lock stress suite
+            args.no_lock_proof = True
 
-    if realistic:
+    if mode == "community":
+        active_slugs = list(all_slugs)
+        # Sample of facility users (not all 1000 — enough concurrent "online")
+        per_map = {
+            s: args.community_actors_per_tenant for s in active_slugs
+        }
+        # Cap global if huge
+        total = sum(per_map.values())
+        if total > args.max_total_actors:
+            scale = args.max_total_actors / total
+            per_map = {
+                s: max(5, int(round(n * scale))) for s, n in per_map.items()
+            }
+        log(
+            f"mode=community (performance baseline) project={args.project}"
+        )
+        log(
+            f"  model: ~{args.community_size} residents/tenant, "
+            f"~{int(args.community_size * args.facility_user_pct / 100)} facility users, "
+            f"~{args.bookings_per_day} bookings/day/tenant"
+        )
+        log(
+            f"  sim: tenants={len(active_slugs)} actors/tenant={args.community_actors_per_tenant} "
+            f"planned_actors={sum(per_map.values())} duration={args.duration} "
+            f"workers={args.workers} pace_ms={args.pace_ms} rush_n={args.rush_n}"
+        )
+        log(
+            f"  expected steady books≈{int(args.bookings_per_day * len(active_slugs) * (1 - args.community_rush_book_frac))} "
+            f"+ rush flash (slot-open contention)"
+        )
+    elif mode == "realistic":
         active_slugs = list(all_slugs)  # all tenants
         per_map = plan_realistic_actors(
             active_slugs,
@@ -1067,7 +1136,7 @@ async def async_main(args: argparse.Namespace) -> int:
             state_path=state_path,
         )
         log(
-            f"mode=realistic project={args.project} "
+            f"mode=realistic (stress soak) project={args.project} "
             f"tenants={len(active_slugs)}/{len(all_slugs)} "
             f"user_pct≈{args.user_pct}% cap/tenant={args.max_users_per_tenant} "
             f"planned_actors={sum(per_map.values())} "
@@ -1209,7 +1278,7 @@ async def async_main(args: argparse.Namespace) -> int:
                 actor = local.choice(actors)
                 await steady_tick(
                     client, metrics, actor, local,
-                    realistic=realistic,
+                    mode=mode,
                     api_key=api_key,
                     password=password,
                     token_max_age_s=token_max_age_s,
@@ -1232,9 +1301,13 @@ async def async_main(args: argparse.Namespace) -> int:
                         f"double={metrics.lock_proof_double} "
                         f"lock_ok={metrics.lock_proof_ok}"
                     )
-                # Only worker 0 triggers lock proof (avoids 12 parallel waves)
-                if wid == 0 and tick > 0 and tick % args.lock_proof_every == 0:
-                    # Refresh a subset before lock proof so contention isn't 401 noise
+                # Only worker 0 triggers lock proof (avoids parallel waves)
+                if (
+                    not args.no_lock_proof
+                    and wid == 0
+                    and tick > 0
+                    and tick % args.lock_proof_every == 0
+                ):
                     for a in actors[: args.lock_proof_n + 4]:
                         await ensure_fresh_token(
                             client, a,
@@ -1303,8 +1376,9 @@ async def async_main(args: argparse.Namespace) -> int:
                 n=args.rush_n,
             )
 
-        # Final lock proof
-        await lock_proof_wave(client, metrics, actors, n=args.lock_proof_n)
+        # Final lock proof (stress modes)
+        if not args.no_lock_proof:
+            await lock_proof_wave(client, metrics, actors, n=args.lock_proof_n)
 
     metrics.ended_at = datetime.now(TZ).isoformat()
     # Final instance sample
@@ -1318,17 +1392,37 @@ async def async_main(args: argparse.Namespace) -> int:
     summary["config"] = {
         "project": args.project,
         "base_domain": args.base_domain,
-        "mode": args.mode,
+        "mode": mode,
+        "profile": (
+            "community_day"
+            if mode == "community"
+            else ("stress_soak" if mode == "realistic" else "legacy_debug")
+        ),
         "duration": args.duration,
-        "tenant_pct_target": 100.0 if realistic else args.tenant_pct,
-        "user_pct": args.user_pct if realistic else None,
-        "max_users_per_tenant": args.max_users_per_tenant if realistic else args.users_per_tenant,
+        "tenant_pct_target": 100.0 if mode in ("realistic", "community") else args.tenant_pct,
+        "user_pct": args.user_pct if mode == "realistic" else None,
+        "community": {
+            "community_size": args.community_size,
+            "facility_user_pct": args.facility_user_pct,
+            "bookings_per_day": args.bookings_per_day,
+            "actors_per_tenant": args.community_actors_per_tenant,
+            "rush_contenders_per_tenant": args.community_rush_contenders_per_tenant,
+        }
+        if mode == "community"
+        else None,
+        "max_users_per_tenant": (
+            args.community_actors_per_tenant
+            if mode == "community"
+            else (args.max_users_per_tenant if mode == "realistic" else args.users_per_tenant)
+        ),
         "tenants_selected": sorted(active_slugs),
         "actors_planned": sum(per_map.values()),
         "actors": len(actors),
         "workers": args.workers,
+        "pace_ms": args.pace_ms,
         "rush_now": args.rush_now,
         "rush_at": args.rush_at,
+        "rush_n": args.rush_n,
         "token_refresh_minutes": args.token_refresh_minutes,
         "soak_quota_slots": args.soak_quota_slots,
     }
@@ -1339,7 +1433,7 @@ async def async_main(args: argparse.Namespace) -> int:
 
     # Exit code: fail if tenant coverage short or lock proof always failed
     actual_pct = 100.0 * summary["active_tenant_count"] / max(1, len(all_slugs))
-    target_pct = 100.0 if realistic else args.tenant_pct
+    target_pct = 100.0 if mode in ("realistic", "community") else args.tenant_pct
     if actual_pct + 0.5 < target_pct * 0.5:
         log(f"FAIL: tenant coverage {actual_pct:.0f}% << target {target_pct}%")
         return 1
@@ -1349,14 +1443,26 @@ async def async_main(args: argparse.Namespace) -> int:
             f"see contention.double_books in report"
         )
         return 1
-    if metrics.lock_proof_ok == 0 and metrics.lock_proof_inconclusive >= 2:
-        log("FAIL: lock proof never got a clean single winner")
-        return 1
+    # Community mode: lock proof is optional (normal day may not run many)
+    if mode != "community":
+        if metrics.lock_proof_ok == 0 and metrics.lock_proof_inconclusive >= 2:
+            log("FAIL: lock proof never got a clean single winner")
+            return 1
+    # Community: soft check books roughly in day-scale ballpark (not a hard gate)
+    if mode == "community":
+        expected = args.bookings_per_day * len(active_slugs)
+        created = summary["bookings_created"]
+        log(
+            f"community books created={created} "
+            f"(model ~{expected}/day across tenants; sim duration={args.duration})"
+        )
     log(
-        f"DONE coverage={actual_pct:.0f}% p95={summary['latency_ms']['p95']}ms "
+        f"DONE mode={mode} coverage={actual_pct:.0f}% "
+        f"p50={summary['latency_ms']['p50']}ms "
+        f"p95={summary['latency_ms']['p95']}ms "
+        f"p99={summary['latency_ms']['p99']}ms "
         f"created={summary['bookings_created']} cancelled={summary['bookings_cancelled']} "
         f"lock_ok={metrics.lock_proof_ok} double={metrics.lock_proof_double} "
-        f"inconclusive={metrics.lock_proof_inconclusive} "
         f"cloud_run_max={summary['cloud_run']['max_instances']}"
     )
     return 0
@@ -1373,11 +1479,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--duration", default="30m", help="e.g. 30m, 2h, 3600s")
     p.add_argument(
         "--mode",
-        choices=("realistic", "legacy"),
+        choices=("community", "realistic", "legacy"),
         default="realistic",
-        help="realistic=all tenants + ~user_pct users + cancel recycle (default); "
-             "legacy=tenant-pct + fixed users-per-tenant",
+        help="community=normal-day performance baseline; "
+             "realistic=stress soak (default); legacy=narrow debug",
     )
+    # ── Community day model (10k people, ~1k facility users, ~100 bookings/day) ──
+    p.add_argument("--community-size", type=int, default=10_000,
+                   help="[community] Reference residents per community (default 10000)")
+    p.add_argument("--facility-user-pct", type=float, default=10.0,
+                   help="[community] %% who use sport facilities (default 10 → ~1000)")
+    p.add_argument("--bookings-per-day", type=int, default=100,
+                   help="[community] Successful bookings/day/tenant target (default 100)")
+    p.add_argument("--community-actors-per-tenant", type=int, default=80,
+                   help="[community] Signed-in facility users sampled per tenant (default 80)")
+    p.add_argument("--community-workers", type=int, default=6,
+                   help="[community] Steady workers if --workers left at stress default")
+    p.add_argument("--community-rush-contenders-per-tenant", type=int, default=25,
+                   help="[community] Parallel bookers at slot-open flash per tenant")
+    p.add_argument("--community-rush-book-frac", type=float, default=0.30,
+                   help="[community] Fraction of daily books expected in open-rush (default 0.30)")
     p.add_argument("--tenant-pct", type=float, default=15.0,
                    help="[legacy] %% of seeded tenants (default 15)")
     p.add_argument("--min-tenants", type=int, default=3)
@@ -1416,6 +1537,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rush-slot", default="", help="Optional fixed HH:MM slot for rush")
     p.add_argument("--lock-proof-every", type=int, default=200, help="Steady ticks between lock proofs")
     p.add_argument("--lock-proof-n", type=int, default=12)
+    p.add_argument(
+        "--no-lock-proof",
+        action="store_true",
+        help="Disable periodic lock-proof waves (recommended for community baseline)",
+    )
     p.add_argument("--report", default="soak-report.json")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--allow-non-test", action="store_true",

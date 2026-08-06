@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### test(perf): community-day performance profile
+
+`--mode community` / `make perf-community`: models ~10k residents, ~10% facility
+users, ~100 bookings/day/tenant, 08:00 slot-open rush. Use for p50/p95/p99 under
+**normal** load (vs `realistic` stress soak).
+
 ### test(soak): realistic multi-tenant user model
 
 Default `--mode realistic`: **all tenants**, ~**12% of users per tenant**
