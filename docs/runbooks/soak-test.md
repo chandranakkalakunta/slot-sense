@@ -106,13 +106,6 @@
      --format='yaml(spec.template.metadata.annotations,spec.template.spec.containerConcurrency,spec.template.spec.containers[0].resources)'
    ```
 
-4. **Auth ADC** for Firestore user sampling:
-
-   ```bash
-   gcloud auth application-default login
-   gcloud config set project slot-sense-test-03
-   ```
-
 5. **Open monitoring** (keep visible the whole run):
 
    | Surface | What to watch |
