@@ -98,7 +98,7 @@ env-release-hold: ## Clear nightly hold — make env-release-hold ENV=test-03
 # ═══════════════════════════════════════════════════════════════
 
 .PHONY: soak-test
-soak-test: ## Realistic soak (all tenants, ~12% users) — make soak-test DURATION=2h
+soak-test: ## Stress soak (realistic) — make soak-test DURATION=2h
 	@cd backend && uv run python ../scripts/soak_test.py \
 		--project slot-sense-test-03 \
 		--base-domain slotsense-test.chandraailabs.com \
@@ -110,6 +110,22 @@ soak-test: ## Realistic soak (all tenants, ~12% users) — make soak-test DURATI
 		--workers $(or $(WORKERS),24) \
 		$(or $(RUSH),--rush-now) \
 		--report ../$(or $(REPORT),soak-report.json)
+
+.PHONY: perf-community
+perf-community: ## Community-day performance: ~100 books/tenant/day + 08:00 rush
+	@cd backend && uv run python ../scripts/soak_test.py \
+		--project slot-sense-test-03 \
+		--base-domain slotsense-test.chandraailabs.com \
+		--mode community \
+		--duration $(or $(DURATION),30m) \
+		--community-size $(or $(COMMUNITY_SIZE),10000) \
+		--facility-user-pct $(or $(FACILITY_USER_PCT),10) \
+		--bookings-per-day $(or $(BOOKINGS_PER_DAY),100) \
+		--community-actors-per-tenant $(or $(ACTORS_PER_TENANT),80) \
+		--community-rush-contenders-per-tenant $(or $(RUSH_PER_TENANT),25) \
+		--no-lock-proof \
+		$(or $(RUSH),--rush-now) \
+		--report ../$(or $(REPORT),perf-community-report.json)
 
 .PHONY: soak-test-legacy
 soak-test-legacy: ## Legacy narrow soak (few tenants × fixed users)

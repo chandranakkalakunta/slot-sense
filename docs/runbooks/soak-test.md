@@ -1,4 +1,4 @@
-# Soak / load test — test environment
+# Performance & soak testing — test environment
 
 **Audience:** Coordinator  
 **Env:** `slot-sense-test-03` only (script refuses non-test projects unless overridden)  
@@ -6,26 +6,64 @@
 **Seed prerequisite:** [seed-test-population.md](./seed-test-population.md)  
 **Observability:** [observability.md](./observability.md)
 
-## Goals
+## Is this “performance testing”?
+
+Yes — with distinct **profiles**:
+
+| Profile | Mode | Question it answers | Intensity |
+|---------|------|---------------------|-----------|
+| **Community day** | `community` | “How do p50/p95/p99 look under **normal** community load?” | Baseline / performance |
+| **Stress soak** | `realistic` | “Does the system hold under **heavy sustained** multi-tenant load?” | Stress / endurance |
+| **Legacy debug** | `legacy` | “Does a tiny actor set still book?” | Debug only |
+
+Your multi-hour **realistic** runs were primarily **stress/endurance** (and concurrency lock proof), not a typical single-community day.
+
+## Community model (performance baseline)
+
+One community approximates:
+
+| Parameter | Default | Meaning |
+|-----------|--------:|---------|
+| Residents | **10,000** | Community size (reference) |
+| Facility users | **~10%** (~1,000) | People who use sport facilities |
+| Bookings / day | **~100** | Successful bookings per tenant per day |
+| Slot open | **08:00** IST (or `--rush-now`) | Contention when popular slots open |
+| Online sample | **~80 actors / tenant** | Concurrent signed-in facility users (not all 1000) |
+
+Per tenant we **do not** sign in 1000 people (auth cost). We sample ~80 “online” facility users and **pace** books so expected creates ≈ 100/day/tenant over `--duration`, plus a **slot-open rush**.
+
+```bash
+# Performance baseline — community day across all tenants
+make perf-community DURATION=30m
+
+# Real wall-clock 08:00 open (start before 08:00 IST)
+make perf-community DURATION=1h RUSH='--rush-at 08:00'
+
+# Then compare
+jq '{config: .config.profile, latency_ms, bookings_created, lock_proof, cloud_run}' \
+  perf-community-report.json
+```
+
+## Stress soak goals (mode=realistic)
 
 | # | Goal | How the harness does it |
 |---|------|-------------------------|
-| 1 | Real traffic mix | Steady workers: **availability**, **book**, **list mine**, **cancel**, facility list |
-| 2 | **Realistic population (default)** | **All tenants** + ~**10–15% of users per tenant** (capped) so quota is spread |
-| 3 | 08:00 morning stress | `--rush-at 08:00` (Asia/Kolkata) or `--rush-now` for immediate flash |
-| 4 | Watch monitoring live | Ops dashboard + Cloud Run metrics open during run (below) |
-| 5 | Lock correctness under load | Periodic **N-parallel same-slot** waves (expect 1 winner) |
-| 6 | Multi-hour sustainability | Cancel-aware mix recycles slots + daily quota (avoids early 409 wall) |
+| 1 | Real traffic mix | Steady workers: **availability**, **book**, **list mine**, **cancel** |
+| 2 | Heavy multi-tenant | **All tenants** + ~**10–15% of users** (capped) |
+| 3 | 08:00 flash | `--rush-at 08:00` or `--rush-now` |
+| 4 | Monitoring | Ops dashboard + Cloud Run metrics |
+| 5 | Lock proof | Periodic N-parallel same-slot waves |
+| 6 | Multi-hour | Cancel recycle + quota bump + token refresh |
 
-### Realistic vs legacy
+### Mode comparison
 
 | Mode | Tenants | Users | Traffic | Use when |
 |------|---------|-------|---------|----------|
-| **`realistic` (default)** | All seeded | ~`user_pct` (12%) of each tenant, capped (`max-users-per-tenant` 40, `max-total-actors` 500) | Prefer **cancel when holding bookings**, book when free | Long soaks, production-like occupancy |
-| **`legacy`** | `tenant-pct` (e.g. 15% → 3 of 20) | Fixed `users-per-tenant` (e.g. 8) | Fixed 25% book / 15% cancel | Quick narrow debug |
+| **`community`** | All | ~80 online facility users / tenant | Browse-heavy, ~100 books/day paced, low cancel | **Performance baseline** (p50/p95/p99) |
+| **`realistic`** | All | ~12% users, capped 500 total | Heavy book/cancel recycle | Stress / endurance |
+| **`legacy`** | 15% tenants | 8 each | Fixed mix | Quick debug |
 
-**Why realistic exists:** With 3 tenants × 8 users, daily `max_slots_per_user_per_sport_per_day` (seed default **2**) is exhausted quickly → `created` freezes and the soak becomes read-only + failed books. Spreading load across **all tenants** and **many more residents**, plus **cancel recycling**, keeps successful bookings possible for 2h+.
-
+**Why realistic exists:** 3×8 hits quota=2 and freezes. Spreading users + cancel recycle keeps stress runs bookable for hours.
 ### Additional scenarios included
 
 | Scenario | Intent |
