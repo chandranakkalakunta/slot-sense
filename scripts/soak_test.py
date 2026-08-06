@@ -76,6 +76,10 @@ class Metrics:
     started_at: str = ""
     ended_at: str = ""
 
+    latencies_all_ms: list[float] = field(default_factory=list)  # includes 401s
+    token_refreshes: int = 0
+    quota_bumps: dict[str, int] = field(default_factory=dict)
+
     def record(
         self,
         op: str,
@@ -86,7 +90,10 @@ class Metrics:
     ) -> None:
         self.ops[op] += 1
         self.status[status] += 1
-        self.latencies_ms.append(ms)
+        self.latencies_all_ms.append(ms)
+        # Exclude pure 401s from SLO percentiles (expired-token noise)
+        if status != 401:
+            self.latencies_ms.append(ms)
         if tenant:
             self.active_tenants.add(tenant)
         if api_code:
@@ -99,11 +106,13 @@ class Metrics:
 
     def summary(self) -> dict[str, Any]:
         lats = sorted(self.latencies_ms)
-        def pct(p: float) -> float | None:
-            if not lats:
+        lats_all = sorted(self.latencies_all_ms)
+
+        def pct(series: list[float], p: float) -> float | None:
+            if not series:
                 return None
-            i = min(len(lats) - 1, max(0, int(round((p / 100) * (len(lats) - 1)))))
-            return round(lats[i], 1)
+            i = min(len(series) - 1, max(0, int(round((p / 100) * (len(series) - 1)))))
+            return round(series[i], 1)
 
         doubles = [e for e in self.contention_events if e.get("result") == "DOUBLE_BOOK"]
         passes = [e for e in self.contention_events if e.get("result") == "PASS"]
@@ -116,12 +125,20 @@ class Metrics:
             "api_codes": dict(self.api_codes.most_common(20)),
             "errors_top": dict(self.errors.most_common(20)),
             "latency_ms": {
+                "note": "excludes HTTP 401 (AUTH_INVALID_TOKEN) from percentiles",
                 "n": len(lats),
-                "p50": pct(50),
-                "p95": pct(95),
-                "p99": pct(99),
+                "n_excluded_401": max(0, len(lats_all) - len(lats)),
+                "p50": pct(lats, 50),
+                "p95": pct(lats, 95),
+                "p99": pct(lats, 99),
                 "max": round(lats[-1], 1) if lats else None,
                 "mean": round(statistics.fmean(lats), 1) if lats else None,
+            },
+            "latency_ms_including_401": {
+                "n": len(lats_all),
+                "p50": pct(lats_all, 50),
+                "p95": pct(lats_all, 95),
+                "p99": pct(lats_all, 99),
             },
             "active_tenants": sorted(self.active_tenants),
             "active_tenant_count": len(self.active_tenants),
@@ -131,6 +148,8 @@ class Metrics:
                 "contenders": self.rush_contenders,
                 "winners": self.rush_winners,
             },
+            "token_refreshes": self.token_refreshes,
+            "quota_bumps": self.quota_bumps,
             "lock_proof": {
                 "ok": self.lock_proof_ok,
                 "fail_double_book": self.lock_proof_double,
@@ -327,6 +346,117 @@ async def firebase_id_token(
     return r.json().get("idToken")
 
 
+def ensure_adc(project: str) -> None:
+    """Fail fast if Application Default Credentials need reauth (common on long laptop sessions)."""
+    log("ADC preflight (Firestore / gcloud application-default)…")
+    try:
+        import google.auth
+        from google.auth.transport.requests import Request
+        from google.cloud import firestore as gcf
+
+        creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        if not creds.valid:
+            creds.refresh(Request())
+        # Cheap live call — surfaces invalid_rapt / reauth clearly
+        db = gcf.Client(project=project, credentials=creds)
+        list(db.collection("tenants").limit(1).stream())
+        log("ADC preflight OK")
+    except Exception as exc:  # noqa: BLE001
+        log("FATAL: Google Application Default Credentials failed.")
+        log(f"  last error: {type(exc).__name__}: {exc}")
+        log("  Re-authenticate, then re-run soak:")
+        log("    gcloud auth login")
+        log("    gcloud auth application-default login")
+        log(f"    gcloud config set project {project}")
+        log("  (ADC is required for Firestore user sampling + quota bump.)")
+        raise SystemExit(2) from exc
+
+
+def bump_tenant_booking_quota(
+    project: str,
+    slugs: list[str],
+    *,
+    max_slots: int,
+    state_path: Path,
+) -> dict[str, int]:
+    """Temporarily raise max_slots_per_user_per_sport_per_day on active tenants (test soak)."""
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app(
+            credentials.ApplicationDefault(), {"projectId": project}
+        )
+    db = firestore.client()
+    state = {}
+    if state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text())
+        except Exception:  # noqa: BLE001
+            state = {}
+    bumped: dict[str, int] = {}
+    for slug in slugs:
+        tid = (state.get("tenants") or {}).get(slug, {}).get("tenant_id")
+        if not tid:
+            for doc in db.collection("tenants").where("slug", "==", slug).limit(1).stream():
+                tid = doc.id
+                break
+        if not tid:
+            log(f"WARN: quota bump skip {slug} (no tenant_id)")
+            continue
+        ref = db.collection("tenants").document(tid)
+        snap = ref.get()
+        data = snap.to_dict() or {} if snap.exists else {}
+        policies = dict(data.get("policies") or {})
+        old = policies.get("max_slots_per_user_per_sport_per_day")
+        policies["max_slots_per_user_per_sport_per_day"] = int(max_slots)
+        ref.set({"policies": policies}, merge=True)
+        bumped[slug] = int(max_slots)
+        log(f"quota bump {slug}: max_slots_per_user_per_sport_per_day {old} → {max_slots}")
+    return bumped
+
+
+async def refresh_actor_token(
+    client: httpx.AsyncClient,
+    actor: Actor,
+    *,
+    api_key: str,
+    password: str,
+    metrics: Metrics,
+) -> bool:
+    tok = await firebase_id_token(client, api_key, actor.email, password)
+    if not tok:
+        metrics.errors["token_refresh_fail"] += 1
+        return False
+    actor.token = tok
+    actor.token_issued_at = time.time()
+    metrics.token_refreshes += 1
+    return True
+
+
+async def ensure_fresh_token(
+    client: httpx.AsyncClient,
+    actor: Actor,
+    *,
+    api_key: str,
+    password: str,
+    metrics: Metrics,
+    max_age_s: float,
+) -> None:
+    age = time.time() - (actor.token_issued_at or 0)
+    if age < max_age_s and actor.token:
+        return
+    ok = await refresh_actor_token(
+        client, actor, api_key=api_key, password=password, metrics=metrics
+    )
+    if ok:
+        log(f"token refresh ok {actor.email} (age was {age/60:.0f}m)")
+    else:
+        log(f"WARN token refresh failed {actor.email}")
+
+
 def _api_code(body: Any) -> str | None:
     if not isinstance(body, dict):
         return None
@@ -443,6 +573,7 @@ class Actor:
     my_bookings: list[str] = field(default_factory=list)
     # Track confirmed opens we created (for cancel preference / quota hygiene)
     open_count: int = 0
+    token_issued_at: float = 0.0  # time.time() when token was minted
 
 
 async def discover_facilities(
@@ -495,6 +626,9 @@ async def steady_tick(
     rng: random.Random,
     *,
     realistic: bool = True,
+    api_key: str = "",
+    password: str = DEFAULT_PASSWORD,
+    token_max_age_s: float = 45 * 60,
 ) -> None:
     """One unit of mixed real-world traffic for a resident.
 
@@ -502,6 +636,12 @@ async def steady_tick(
     daily quota (max_slots_per_user_per_sport_per_day) and facility slots
     recycle — long soaks stay bookable instead of dying on 409 QUOTA.
     """
+    if api_key:
+        await ensure_fresh_token(
+            client, actor,
+            api_key=api_key, password=password, metrics=metrics,
+            max_age_s=token_max_age_s,
+        )
     if not actor.facility_ids:
         await discover_facilities(client, metrics, actor)
         if not actor.facility_ids:
@@ -848,10 +988,14 @@ async def async_main(args: argparse.Namespace) -> int:
         log("ERROR: refuse non-test project (pass --allow-non-test to override)")
         return 2
 
+    # Fail before multi-hour work if laptop ADC is stale (invalid_rapt / reauth)
+    ensure_adc(args.project)
+
     duration_s = parse_duration(args.duration)
     all_slugs = load_tenant_slugs(Path(args.state_file))
     state_path = Path(args.state_file)
     realistic = args.mode == "realistic"
+    token_max_age_s = float(args.token_refresh_minutes) * 60.0
 
     if realistic:
         active_slugs = list(all_slugs)  # all tenants
@@ -896,6 +1040,21 @@ async def async_main(args: argparse.Namespace) -> int:
     log("TIP: hold nightly disable → make env-hold ENV=test-03 DAYS=1 REASON=soak")
     log("TIP: open SlotSense Ops dashboard + Cloud Run metrics for this project")
 
+    metrics = Metrics()
+    metrics.started_at = datetime.now(TZ).isoformat()
+    password = args.password
+    api_key = args.firebase_api_key
+
+    # Temporary soak quota headroom (seed default is often 2)
+    if args.soak_quota_slots > 0:
+        log(f"raising booking quota to {args.soak_quota_slots} slots/user/sport/day…")
+        metrics.quota_bumps = bump_tenant_booking_quota(
+            args.project,
+            active_slugs,
+            max_slots=args.soak_quota_slots,
+            state_path=state_path,
+        )
+
     log("sampling residents from Firestore (ADC)…")
     samples = sample_residents_from_firestore(
         args.project, active_slugs, per_tenant=per_map
@@ -904,15 +1063,10 @@ async def async_main(args: argparse.Namespace) -> int:
         log("ERROR: no residents sampled — is seed complete and ADC authed?")
         return 1
 
-    metrics = Metrics()
-    metrics.started_at = datetime.now(TZ).isoformat()
-    password = args.password
-    api_key = args.firebase_api_key
-
     actors: list[Actor] = []
     async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
         # Auth pool (bounded concurrency — Identity Toolkit rate limits)
-        log("signing in residents…")
+        log("signing in residents (fresh tokens for this soak)…")
         auth_sem = asyncio.Semaphore(max(4, args.auth_concurrency))
 
         async def _auth_one(slug: str, row: dict[str, str], origin: str) -> Actor | None:
@@ -924,7 +1078,11 @@ async def async_main(args: argparse.Namespace) -> int:
                 metrics.errors["auth_fail"] += 1
                 return None
             return Actor(
-                slug=slug, email=row["email"], token=tok, origin=origin
+                slug=slug,
+                email=row["email"],
+                token=tok,
+                origin=origin,
+                token_issued_at=time.time(),
             )
 
         auth_jobs = []
@@ -991,7 +1149,11 @@ async def async_main(args: argparse.Namespace) -> int:
             while time.monotonic() < end:
                 actor = local.choice(actors)
                 await steady_tick(
-                    client, metrics, actor, local, realistic=realistic
+                    client, metrics, actor, local,
+                    realistic=realistic,
+                    api_key=api_key,
+                    password=password,
+                    token_max_age_s=token_max_age_s,
                 )
                 tick += 1
                 await asyncio.sleep(args.pace_ms / 1000.0)
@@ -999,21 +1161,50 @@ async def async_main(args: argparse.Namespace) -> int:
                     s = metrics.summary()
                     log(
                         f"progress ops={s['latency_ms']['n']} "
+                        f"(excl401 n={s['latency_ms'].get('n_excluded_401', 0)}) "
                         f"p50={s['latency_ms']['p50']}ms "
                         f"p95={s['latency_ms']['p95']}ms "
                         f"p99={s['latency_ms']['p99']}ms "
                         f"tenants={s['active_tenant_count']} "
                         f"created={s['bookings_created']} cancelled={s['bookings_cancelled']} "
                         f"5xx={sum(v for k,v in metrics.status.items() if k >= 500)} "
+                        f"401={metrics.status.get(401, 0)} "
+                        f"refresh={metrics.token_refreshes} "
                         f"double={metrics.lock_proof_double} "
                         f"lock_ok={metrics.lock_proof_ok}"
                     )
                 # Only worker 0 triggers lock proof (avoids 12 parallel waves)
                 if wid == 0 and tick > 0 and tick % args.lock_proof_every == 0:
+                    # Refresh a subset before lock proof so contention isn't 401 noise
+                    for a in actors[: args.lock_proof_n + 4]:
+                        await ensure_fresh_token(
+                            client, a,
+                            api_key=api_key, password=password, metrics=metrics,
+                            max_age_s=token_max_age_s,
+                        )
                     await lock_proof_wave(client, metrics, actors, n=args.lock_proof_n)
+
+        async def proactive_token_refresh_loop() -> None:
+            """Refresh all actor tokens every token_max_age_s / 2 (belt + suspenders)."""
+            interval = max(60.0, token_max_age_s / 2)
+            while time.monotonic() < end:
+                await asyncio.sleep(interval)
+                log(f"proactive token refresh wave ({len(actors)} actors)…")
+                sem = asyncio.Semaphore(max(4, args.auth_concurrency))
+
+                async def _one(a: Actor) -> None:
+                    async with sem:
+                        await refresh_actor_token(
+                            client, a,
+                            api_key=api_key, password=password, metrics=metrics,
+                        )
+
+                await asyncio.gather(*[_one(a) for a in actors])
+                log(f"proactive refresh done total_refreshes={metrics.token_refreshes}")
 
         await asyncio.gather(
             sample_instances_loop(),
+            proactive_token_refresh_loop(),
             *[worker(i) for i in range(args.workers)],
         )
 
@@ -1052,6 +1243,8 @@ async def async_main(args: argparse.Namespace) -> int:
         "workers": args.workers,
         "rush_now": args.rush_now,
         "rush_at": args.rush_at,
+        "token_refresh_minutes": args.token_refresh_minutes,
+        "soak_quota_slots": args.soak_quota_slots,
     }
     report_path = Path(args.report)
     report_path.write_text(json.dumps(summary, indent=2) + "\n")
@@ -1114,6 +1307,19 @@ def build_parser() -> argparse.ArgumentParser:
                    help="[realistic] Global cap after per-tenant plan (default 500)")
     p.add_argument("--auth-concurrency", type=int, default=16,
                    help="Parallel Firebase sign-ins (default 16)")
+    p.add_argument(
+        "--token-refresh-minutes",
+        type=float,
+        default=45.0,
+        help="Re-sign-in Firebase ID token after this many minutes (default 45; Firebase ~60m TTL)",
+    )
+    p.add_argument(
+        "--soak-quota-slots",
+        type=int,
+        default=10,
+        help="Temporarily set max_slots_per_user_per_sport_per_day on active tenants "
+             "(default 10 for soak; 0 = do not change policies)",
+    )
     p.add_argument("--workers", type=int, default=24, help="Concurrent steady-state workers")
     p.add_argument("--pace-ms", type=int, default=80, help="Sleep between ticks per worker")
     p.add_argument("--rush-now", action="store_true", help="Fire morning-rush flash immediately")

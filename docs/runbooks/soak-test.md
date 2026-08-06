@@ -50,15 +50,27 @@
 
 ## Before you start (checklist)
 
-1. **Seed complete** on test-03 (~20 tenants, residents + facilities).  
-2. **Env powered on** and **hold nightly disable** for the soak window:
+1. **Re-authenticate ADC** (required every day / after laptop sleep — soak samples Firestore):
+
+   ```bash
+   gcloud auth login
+   gcloud auth application-default login
+   gcloud config set project slot-sense-test-03
+   ```
+
+   The harness runs an **ADC preflight** first; if you see  
+   `Reauthentication is needed` / `invalid_rapt` / `RetryError: Timeout`,  
+   run the commands above and restart soak. Non-interactive reauth is not possible.
+
+2. **Seed complete** on test-03 (~20 tenants, residents + facilities).  
+3. **Env powered on** and **hold nightly disable** for the soak window:
 
    ```bash
    make env-enable ENV=test-03
    make env-hold ENV=test-03 DAYS=1 REASON="soak test"
    ```
 
-3. **Warm + latency profile** (recommended for ~1s p95 target under soak):
+4. **Warm + latency profile** (recommended for ~1s p95 target under soak):
 
    Cloud Run only scales past 1 instance when concurrent requests approach
    `containerConcurrency`. A light soak with concurrency=80 stays on **one**
@@ -121,6 +133,16 @@
 
 6. **Frontend deploy** with latest code if you will also click around during soak (optional).
 
+### Harness auto-steps (realistic soak)
+
+| Step | Default |
+|------|---------|
+| ADC preflight | Fail fast with reauth instructions |
+| Fresh Firebase sign-in for all actors | At start |
+| Token refresh | Every **45 min** (and proactive mid-interval wave) |
+| Temporary quota | `max_slots_per_user_per_sport_per_day` → **10** on active tenants (`--soak-quota-slots 0` to skip) |
+| Latency percentiles | **Exclude HTTP 401** (expired-token noise) |
+
 ---
 
 ## Run
@@ -171,8 +193,12 @@ make soak-test-legacy DURATION=15m          # old 15% tenants × 8 users
 | `--rush-n` | `80` | Max contenders in flash |
 | `--pace-ms` | `80` | Delay between ticks per worker |
 | `--report` | `soak-report.json` | JSON summary path |
+| `--token-refresh-minutes` | `45` | Re-mint Firebase ID tokens before ~1h expiry |
+| `--soak-quota-slots` | `10` | Temp raise daily booking quota for soak tenants (0 = leave policy) |
 
-**Auth cost:** realistic mode may sign in hundreds of users (capped). First minutes are auth + facility warm-up before steady traffic.
+**Auth cost:** realistic mode may sign in hundreds of users (capped). First minutes are ADC check + auth + optional quota bump + facility warm-up.
+
+**Quota note:** soak writes `policies.max_slots_per_user_per_sport_per_day` on each active tenant (default 10). Re-seed or PATCH policies later if you want seed default (2) restored.
 
 Password defaults to seed `ResidentPass143$`. Firebase API key defaults from
 `infrastructure/firebase-web-configs/slot-sense-test-03.json` when project is test-03.
