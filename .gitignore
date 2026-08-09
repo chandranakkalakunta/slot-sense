@@ -77,6 +77,9 @@ tests/e2e/playwright-report/
 tests/e2e/test-results/
 # Large test population seed progress
 .seed-test-population-state.json
+# Local load/soak artifacts (regenerable; do not commit)
+perf-community-report.json
+soak-report.json
 
 
 

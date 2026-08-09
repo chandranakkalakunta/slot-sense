@@ -44,15 +44,54 @@ resource "google_compute_url_map" "slotsense_https" {
       }
     }
 
+    # SPA client routes: rewrite to /index.html BEFORE GCS (same technique as "/").
+    # Relying solely on default_custom_error_response_policy (404→index.html) is
+    # unreliable with backend buckets — observed HTTP 200 + Content-Length: 0 with
+    # the correct index.html etag but an empty body, which blanks the UI and fails
+    # Playwright (heading / #sign-in-email never mount). Explicit path rewrites
+    # make GCS fetch the real object every time.
+    #
+    # Use exact paths only. path_prefix_rewrite on "/prefix/*" appends the
+    # remainder (e.g. /facilities/xyz → /index.html/xyz), which 404s. Dynamic
+    # segments (/facilities/:id, /admin/tenants/:id/users/new) fall through to
+    # custom error (best-effort) or client-side navigation after SPA load.
+    # Paths mirror frontend/src/App.tsx static routes.
+    path_rule {
+      paths = [
+        "/signin",
+        "/forgot-password",
+        "/reset",
+        "/force-password",
+        "/bookings",
+        "/invoices",
+        "/account",
+        "/assistant",
+        "/admin",
+        "/admin/facility-catalog",
+        "/admin/tenants/new",
+        "/tenant",
+        "/tenant/facilities",
+        "/tenant/branding",
+        "/tenant/policies",
+        "/tenant/users",
+        "/tenant/overview",
+        "/tenant/invoices",
+      ]
+      service = google_compute_backend_bucket.frontend.id
+      route_action {
+        url_rewrite {
+          path_prefix_rewrite = "/index.html"
+        }
+      }
+    }
+
     path_rule {
       paths   = ["/api/*", "/health", "/readyz", "/version"]
       service = google_compute_backend_service.api.id
     }
 
-    # SPA catch-all: GCS returns 404 for every client-side route that has no
-    # matching object key. This policy intercepts those 404s, fetches
-    # /index.html from the same frontend bucket, and returns HTTP 200 —
-    # matching Firebase Hosting's "source: **" catch-all rewrite behaviour.
+    # Best-effort SPA fallback for paths not listed above. Prefer path_rule
+    # rewrites for production client routes (see comment on SPA path_rule).
     default_custom_error_response_policy {
       error_response_rule {
         match_response_codes   = ["404"]

@@ -8,11 +8,11 @@
 # only pre-built frontend assets with no PII. uniform_bucket_level_access is
 # required so the public IAM binding applies uniformly (per ADR-0031 Decision 2).
 #
-# SPA catch-all: Vite builds a single index.html; every client-side route (e.g.
-# /dashboard, /facilities/abc) maps to a GCS key that does not exist, so GCS
-# returns 404. The URL map's defaultCustomErrorResponsePolicy (set in
-# load_balancer_routing.tf) intercepts those 404s and re-serves /index.html
-# with HTTP 200, replicating Firebase Hosting's "source: **" catch-all rewrite.
+# SPA routing: Vite builds a single index.html. Client routes are rewritten to
+# /index.html via path_rule url_rewrite in load_balancer_routing.tf (required —
+# defaultCustomErrorResponsePolicy 404→index.html alone can return HTTP 200 with
+# an empty body on backend buckets). Custom error remains best-effort for
+# unlisted dynamic paths.
 
 # ── GCS bucket (stores frontend/dist/ output uploaded in Phase 8b.2b CI step) ──
 
