@@ -123,6 +123,9 @@ setup, and known issues.
 
 ## Key documents
 
+- [`docs/architecture/SlotSense-System-Architecture-Document.md`](docs/architecture/SlotSense-System-Architecture-Document.md)
+  — **System Architecture Document (SAD):** multi-level context →
+  container → component → deployment view of the platform
 - [`docs/runbooks/create-environment-step-by-step.md`](docs/runbooks/create-environment-step-by-step.md)
   — **create a full GCP environment** (dev/test/prod): plain-English
   steps for the automated installer + DNS + first admin login
